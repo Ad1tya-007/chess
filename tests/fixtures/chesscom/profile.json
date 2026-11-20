@@ -1,0 +1,19 @@
+{
+  "avatar": "https://images.chesscomfiles.com/uploads/v1/user/1.png",
+  "player_id": 123456,
+  "@id": "https://api.chess.com/pub/player/testplayer",
+  "url": "https://www.chess.com/member/TestPlayer",
+  "name": "Test Player",
+  "username": "testplayer",
+  "title": "FM",
+  "followers": 42,
+  "country": "https://api.chess.com/pub/country/US",
+  "location": "Somewhere",
+  "last_online": 1795038203,
+  "joined": 1178556600,
+  "status": "premium",
+  "is_streamer": false,
+  "verified": false,
+  "league": "Silver",
+  "streaming_platforms": []
+}
