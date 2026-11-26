@@ -64,7 +64,7 @@ export function registerSyncTools(
       description:
         'Download monthly game archives from the public Chess.com API into the local database, ' +
         'which get_recent_games, get_game_details, get_opening_statistics, get_opening_move_tree, ' +
-        'get_opponent_statistics, and get_performance_summary read from. Use mode "incremental" ' +
+        'get_opponent_statistics, get_performance_summary, and get_result_breakdown read from. Use mode "incremental" ' +
         '(default) to refresh the newest months, and mode "initial" to import older history: ' +
         'each initial call imports the next batch of never-downloaded months, newest first; ' +
         'repeat while archives_remaining > 0 and more history is needed. Only writes to the ' +

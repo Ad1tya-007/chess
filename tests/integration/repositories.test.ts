@@ -143,6 +143,32 @@ describe.skipIf(!testDatabaseUrl)('repositories (requires TEST_DATABASE_URL)', (
       );
     });
 
+    it('backfills null termination codes when a re-sync supplies them', async () => {
+      const player = await players.getOrCreate(PLAYER);
+      const original = {
+        ...normalized(),
+        playerResultCode: null,
+        termination: null,
+      };
+      await games.upsertMany(player.id, [original]);
+      expect((await games.findByUrl(player.id, original.chesscomGameUrl))?.termination).toBeNull();
+
+      const filled = {
+        ...original,
+        playerResultCode: 'win',
+        termination: 'checkmated',
+      };
+      expect(await games.upsertMany(player.id, [filled])).toEqual({
+        inserted: 0,
+        updated: 1,
+        unchanged: 0,
+      });
+      expect(await games.findByUrl(player.id, original.chesscomGameUrl)).toMatchObject({
+        playerResultCode: 'win',
+        termination: 'checkmated',
+      });
+    });
+
     it('de-duplicates repeated games within one batch', async () => {
       const player = await players.getOrCreate(PLAYER);
       const game = normalized();

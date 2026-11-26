@@ -6,10 +6,13 @@ import type {
   OpponentStat,
   RatingAverage,
   RatingTrend,
+  ResultBreakdown,
   ResultSummary,
   Streak,
   StreakSummary,
+  TerminationCount,
 } from './analytics.types.js';
+import type { GameResult } from './game.types.js';
 
 /** Openings (or other groups) with fewer games than this are flagged as low-sample. */
 export const LOW_SAMPLE_GAMES = 10;
@@ -358,6 +361,51 @@ function summarizeBucket(bucket: MoveBucket): ResultSummary {
 function scoreOf(bucket: MoveBucket): number {
   if (bucket.games <= 0) return 0;
   return (bucket.wins + 0.5 * bucket.draws) / bucket.games;
+}
+
+/**
+ * Breaks results down by Chess.com termination code within each win/loss/draw bucket.
+ * Games with a null `termination` are counted in `missingTermination` and omitted from the
+ * per-code lists — never guessed. Percentages are within each result bucket.
+ */
+export function breakdownByTermination(
+  games: readonly Pick<AnalyticsGame, 'result' | 'termination'>[],
+): ResultBreakdown {
+  const totals = summarizeResults(games);
+  const buckets: Record<GameResult, Map<string, number>> = {
+    win: new Map(),
+    loss: new Map(),
+    draw: new Map(),
+  };
+  let missingTermination = 0;
+
+  for (const game of games) {
+    if (game.termination === null) {
+      missingTermination += 1;
+      continue;
+    }
+    const bucket = buckets[game.result];
+    bucket.set(game.termination, (bucket.get(game.termination) ?? 0) + 1);
+  }
+
+  const toCounts = (result: GameResult, map: Map<string, number>): TerminationCount[] => {
+    const denom = result === 'win' ? totals.wins : result === 'loss' ? totals.losses : totals.draws;
+    return [...map.entries()]
+      .map(([code, count]) => ({
+        code,
+        games: count,
+        percentage: percentage(count, denom),
+      }))
+      .sort((a, b) => b.games - a.games || a.code.localeCompare(b.code));
+  };
+
+  return {
+    totals,
+    wins: toCounts('win', buckets.win),
+    losses: toCounts('loss', buckets.loss),
+    draws: toCounts('draw', buckets.draw),
+    missingTermination,
+  };
 }
 
 /** Avoids Math.min(...values), which overflows the call stack for very large arrays. */

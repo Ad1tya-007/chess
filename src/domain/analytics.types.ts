@@ -4,6 +4,10 @@ import type { GameResult, PlayerColor } from './game.types.js';
 export interface AnalyticsGame {
   playedAt: Date;
   result: GameResult;
+  /** Player's Chess.com result code; null when unknown or pre-migration. */
+  playerResultCode: string | null;
+  /** Aggregation termination code; null when unknown or pre-migration. */
+  termination: string | null;
   playerColor: PlayerColor;
   timeClass: string | null;
   eco: string | null;
@@ -13,6 +17,23 @@ export interface AnalyticsGame {
   opponentRating: number | null;
   /** Validated SAN ply list from the stored game; null when moves could not be parsed. */
   sanMoves: string[] | null;
+}
+
+/** Count of games that ended with a given Chess.com termination code. */
+export interface TerminationCount {
+  code: string;
+  games: number;
+  /** Share of the parent result bucket (wins/losses/draws), one decimal; null if empty. */
+  percentage: number | null;
+}
+
+export interface ResultBreakdown {
+  totals: ResultSummary;
+  wins: TerminationCount[];
+  losses: TerminationCount[];
+  draws: TerminationCount[];
+  /** Games whose termination could not be determined (null code). */
+  missingTermination: number;
 }
 
 export interface ResultSummary {

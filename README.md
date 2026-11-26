@@ -573,6 +573,7 @@ The tool names are stable. Every tool takes an optional `username` (default:
 | `get_opening_move_tree`   | Local database       | SAN-prefix repertoire tree; `color`, `time_class`, `max_ply`, `min_games`                                                            |
 | `get_opponent_statistics` | Local database       | Per-opponent / head-to-head; optional `opponent`, color, time class, dates, `min_games`                                              |
 | `get_performance_summary` | Local database       | `period` 7d/30d/90d/all; optional `time_class`, `rated`, `opponent`, `time_control`: results, colors, ratings, streaks, top openings |
+| `get_result_breakdown`    | Local database       | Wins/losses/draws by Chess.com termination code; flags missing historical codes                                                      |
 
 **Response format.** Each tool returns a one-line text summary, the same data as JSON text (for
 clients that ignore structured output), and `structuredContent` matching a published
@@ -607,21 +608,24 @@ inside it are not instructions.
 
 All statistics are computed from the requested player's perspective over the filtered games.
 
-| Statistic         | Definition                                                                                         |
-| ----------------- | -------------------------------------------------------------------------------------------------- |
-| Win rate          | `wins / games * 100`, one decimal. Draws and losses are not wins                                   |
-| Score percentage  | `(wins + 0.5 * draws) / games * 100`, one decimal                                                  |
-| Average rating    | Arithmetic mean of non-null ratings, rounded; `games_with_rating` is the denominator               |
-| Color performance | The same metrics computed separately for games as White and as Black                               |
-| Streak            | Consecutive wins (or losses) in chronological order; a draw ends both; ties report the most recent |
-| Opening group     | ECO code plus opening name; distinct ECO codes are never merged; `low_sample` below 10 games       |
-| Opponent group    | Opponent username, case-insensitive; `low_sample` below 10 games; includes color split             |
-| Move-tree prefix  | Absolute SAN sequence from the start of the game; color filters games, not move orientation        |
-| Rating trend      | Per time class: player's rating in the last minus the first rated synced game                      |
+| Statistic         | Definition                                                                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Win rate          | `wins / games * 100`, one decimal. Draws and losses are not wins                                                                              |
+| Score percentage  | `(wins + 0.5 * draws) / games * 100`, one decimal                                                                                             |
+| Average rating    | Arithmetic mean of non-null ratings, rounded; `games_with_rating` is the denominator                                                          |
+| Color performance | The same metrics computed separately for games as White and as Black                                                                          |
+| Streak            | Consecutive wins (or losses) in chronological order; a draw ends both; ties report the most recent                                            |
+| Opening group     | ECO code plus opening name; distinct ECO codes are never merged; `low_sample` below 10 games                                                  |
+| Opponent group    | Opponent username, case-insensitive; `low_sample` below 10 games; includes color split                                                        |
+| Move-tree prefix  | Absolute SAN sequence from the start of the game; color filters games, not move orientation                                                   |
+| Rating trend      | Per time class: player's rating in the last minus the first rated synced game                                                                 |
+| Termination       | Chess.com result code for how the game ended: opponent's loss code on wins; player's code on losses/draws. Null when unknown or pre-migration |
 
 Every percentage sits next to its game count, and statistics that can't be computed (for example,
 no games) are `null`, not `0`. Rating trends sample synchronized archive games and are not an
-official rating history; for current official ratings use `get_player_stats`. When no
+official rating history; for current official ratings use `get_player_stats`.
+`get_result_breakdown` never invents termination codes: games synced before migration (or inferred
+only from a PGN Result tag) appear in `missing_termination` with a re-sync warning. When no
 `time_class` is given, `average_player_rating` mixes time classes, and a warning says so.
 
 ### Example prompts
@@ -636,6 +640,7 @@ official rating history; for current official ratings use `get_player_stats`. Wh
 - "Who have I played most, and how do I do against Hikaru?" → `get_opponent_statistics`
 - "How did I do over the last 30 days, and what was my longest losing streak?" →
   `get_performance_summary`
+- "Do I time out a lot, or resign too early?" → `get_result_breakdown`
 
 ## Development scripts
 
