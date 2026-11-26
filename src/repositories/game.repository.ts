@@ -11,6 +11,8 @@ export interface GameFilters {
   timeClass?: TimeClass | undefined;
   result?: GameResult | undefined;
   color?: PlayerColor | undefined;
+  /** Exact opponent match (case-insensitive). */
+  opponent?: string | undefined;
   /** Inclusive lower bound on played_at. */
   from?: Date | undefined;
   /** Exclusive upper bound on played_at. */
@@ -55,6 +57,9 @@ function whereClause(playerId: string, filters: GameFilters): SQL {
   if (filters.timeClass) conditions.push(eq(games.timeClass, filters.timeClass));
   if (filters.result) conditions.push(eq(games.result, filters.result));
   if (filters.color) conditions.push(eq(games.playerColor, filters.color));
+  if (filters.opponent) {
+    conditions.push(sql`lower(${games.opponentUsername}) = ${filters.opponent.toLowerCase()}`);
+  }
   if (filters.from) conditions.push(gte(games.playedAt, filters.from));
   if (filters.until) conditions.push(lt(games.playedAt, filters.until));
   return and(...conditions)!;
@@ -201,6 +206,7 @@ export class GameRepository {
         eco: games.eco,
         openingName: games.openingName,
         playerRating: PLAYER_RATING,
+        opponentUsername: games.opponentUsername,
         opponentRating: games.opponentRating,
       })
       .from(games)

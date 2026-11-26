@@ -6,7 +6,7 @@ statistics, and performance summaries. Claude connects to it as a **remote MCP s
 Streamable HTTP**; Claude does the natural-language interpretation, this server only returns
 structured data.
 
-> **Status: Milestone 6 (remote deployment) implemented.** All seven tools work end to end. The
+> **Status: Milestone 6 (remote deployment) implemented.** All tools work end to end. The
 > server is ready for a public HTTPS deployment that Claude.ai connects to without sign-in,
 > restricted to Anthropic's outbound IP ranges and locked to one Chess.com username. Verification
 > against a live Claude custom connector requires your deployment and Claude account; see
@@ -49,7 +49,7 @@ result to snake_case JSON. Services own the logic; analytics formulas are pure f
 | `src/server/access.ts`               | `/mcp` access control: client IP allowlist, then bearer token        |
 | `src/server/auth.ts`                 | Static bearer-token verifier for the SDK's `requireBearerAuth`       |
 | `src/utils/ip-allowlist.ts`          | CIDR parsing and IPv4/IPv6 matching (`node:net` `BlockList`)         |
-| `src/server/create-server.ts`        | Per-request `McpServer` factory; registers the seven tools           |
+| `src/server/create-server.ts`        | Per-request `McpServer` factory; registers the MCP tools             |
 | `src/server/tools/*.tools.ts`        | Tool definitions: descriptions, input/output schemas, annotations    |
 | `src/server/tools/shared.ts`         | Shared schemas, date parsing, and the error-safe `runTool` wrapper   |
 | `src/db/schema.ts`                   | Drizzle schema: `players`, `games`, `chesscom_archives`, `sync_runs` |
@@ -521,18 +521,19 @@ the sync run ID and timestamps.
 
 ## MCP tools
 
-The seven tool names are stable. Every tool takes an optional `username` (default:
+The tool names are stable. Every tool takes an optional `username` (default:
 `CHESSCOM_USERNAME`) and validates all input with Zod.
 
-| Tool                      | Data source          | Purpose                                                                           |
-| ------------------------- | -------------------- | --------------------------------------------------------------------------------- |
-| `get_player_profile`      | Chess.com (live)     | Name, title, country, profile URL, join date, last online                         |
-| `get_player_stats`        | Chess.com (live)     | Current and best rating plus all-time record per category; FIDE, tactics          |
-| `sync_chesscom_games`     | Chess.com → database | Import monthly archives (`mode`, `months` 1–`MAX_SYNC_MONTHS_PER_CALL`)           |
-| `get_recent_games`        | Local database       | Newest-first games; filter by `time_class`, `result`, `color`, dates; page        |
-| `get_game_details`        | Local database       | Metadata, PGN, and SAN moves for one stored game by `game_url`                    |
-| `get_opening_statistics`  | Local database       | Per-opening results; `color` (white/black/both), `time_class`, dates, `min_games` |
-| `get_performance_summary` | Local database       | `period` 7d/30d/90d/all: results, colors, ratings, streaks, top openings          |
+| Tool                      | Data source          | Purpose                                                                                      |
+| ------------------------- | -------------------- | -------------------------------------------------------------------------------------------- |
+| `get_player_profile`      | Chess.com (live)     | Name, title, country, profile URL, join date, last online                                    |
+| `get_player_stats`        | Chess.com (live)     | Current and best rating plus all-time record per category; FIDE, tactics                     |
+| `sync_chesscom_games`     | Chess.com → database | Import monthly archives (`mode`, `months` 1–`MAX_SYNC_MONTHS_PER_CALL`)                      |
+| `get_recent_games`        | Local database       | Newest-first games; filter by `time_class`, `result`, `color`, dates; page                   |
+| `get_game_details`        | Local database       | Metadata, PGN, and SAN moves for one stored game by `game_url`                               |
+| `get_opening_statistics`  | Local database       | Per-opening results; `color` (white/black/both), `time_class`, dates, `min_games`            |
+| `get_opponent_statistics` | Local database       | Per-opponent / head-to-head; optional `opponent`, color, time class, dates, `min_games`      |
+| `get_performance_summary` | Local database       | `period` 7d/30d/90d/all: results, colors, ratings, streaks, top openings                     |
 
 **Response format.** Each tool returns a one-line text summary, the same data as JSON text (for
 clients that ignore structured output), and `structuredContent` matching a published
@@ -547,9 +548,10 @@ ranges that start before the earliest synced month, and truncated analytics.
 Unexpected internal errors return a generic message; details go only to server logs.
 
 **Bounds.** `get_recent_games`: `limit` 1–100 (default `DEFAULT_GAME_LIMIT`), `offset` ≤ 10,000,
-and no PGNs (use `get_game_details`). `get_opening_statistics`: `limit` 1–100 (default 20),
-`min_games` default 3. Analytics consider at most the 50,000 most recent matching games and warn
-if more exist. Request bodies are capped at 64 KB.
+and no PGNs (use `get_game_details`). `get_opening_statistics` / `get_opponent_statistics`:
+`limit` 1–100 (default 20), `min_games` default 3 (1 when `opponent` is set on opponent stats).
+Analytics consider at most the 50,000 most recent matching games and warn if more exist. Request
+bodies are capped at 64 KB.
 
 **`get_game_details` safety.** The URL is only a lookup key into the local database and is never
 fetched. It accepts `https://www.chess.com/game/<type>/<id>`, with or without `www`, a trailing
@@ -568,6 +570,7 @@ All statistics are computed from the requested player's perspective over the fil
 | Color performance | The same metrics computed separately for games as White and as Black                               |
 | Streak            | Consecutive wins (or losses) in chronological order; a draw ends both; ties report the most recent |
 | Opening group     | ECO code plus opening name; distinct ECO codes are never merged; `low_sample` below 10 games       |
+| Opponent group    | Opponent username, case-insensitive; `low_sample` below 10 games; includes color split             |
 | Rating trend      | Per time class: player's rating in the last minus the first rated synced game                      |
 
 Every percentage sits next to its game count, and statistics that can't be computed (for example,
@@ -584,6 +587,7 @@ official rating history; for current official ratings use `get_player_stats`. Wh
 - "Walk me through the moves of this game: https://www.chess.com/game/live/123456789" →
   `get_game_details`
 - "Which openings score best for me as Black in blitz this year?" → `get_opening_statistics`
+- "Who have I played most, and how do I do against Hikaru?" → `get_opponent_statistics`
 - "How did I do over the last 30 days, and what was my longest losing streak?" →
   `get_performance_summary`
 

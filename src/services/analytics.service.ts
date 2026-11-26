@@ -1,5 +1,6 @@
 import {
   aggregateOpenings,
+  aggregateOpponents,
   averageRating,
   computeStreaks,
   LOW_SAMPLE_GAMES,
@@ -9,6 +10,7 @@ import {
 import type {
   AnalyticsGame,
   OpeningStat,
+  OpponentStat,
   RatingAverage,
   RatingTrend,
   ResultSummary,
@@ -16,7 +18,8 @@ import type {
 } from '../domain/analytics.types.js';
 import type { PlayerColor, TimeClass } from '../domain/game.types.js';
 import type { GameFilters, GameRepository } from '../repositories/game.repository.js';
-import { resolveUsername } from '../utils/chesscom-username.js';
+import { isValidChessComUsername, resolveUsername } from '../utils/chesscom-username.js';
+import { AppError } from '../utils/errors.js';
 import { assertInteger, assertRange } from './game.service.js';
 import type { LocalDataService, LocalDataStatus } from './local-data.service.js';
 
@@ -26,6 +29,8 @@ export const DEFAULT_MIN_GAMES = 3;
 export const MAX_MIN_GAMES = 1_000;
 export const DEFAULT_OPENING_LIMIT = 20;
 export const MAX_OPENING_LIMIT = 100;
+export const DEFAULT_OPPONENT_LIMIT = 20;
+export const MAX_OPPONENT_LIMIT = 100;
 export const TOP_OPENINGS_IN_SUMMARY = 5;
 
 export const PERIODS = ['7d', '30d', '90d', 'all'] as const;
@@ -97,6 +102,39 @@ export interface PerformanceSummary {
   ratingTrends: RatingTrend[];
   topOpenings: OpeningStat[];
   streaks: StreakSummary;
+  firstGameAt: Date | null;
+  lastGameAt: Date | null;
+  truncated: boolean;
+  local: LocalDataStatus;
+  warnings: string[];
+}
+
+export interface OpponentStatisticsQuery {
+  username?: string | undefined;
+  /** When set, return only the head-to-head vs this opponent (case-insensitive). */
+  opponent?: string | undefined;
+  color?: PlayerColor | 'both' | undefined;
+  timeClass?: TimeClass | undefined;
+  from?: Date | undefined;
+  until?: Date | undefined;
+  minGames?: number | undefined;
+  limit?: number | undefined;
+}
+
+export interface OpponentStatistics {
+  username: string;
+  opponentFilter: string | null;
+  color: PlayerColor | 'both';
+  timeClass: TimeClass | null;
+  from: Date | null;
+  until: Date | null;
+  minGames: number;
+  totals: ResultSummary;
+  opponents: OpponentStat[];
+  /** Opponent groups meeting minGames, before applying `limit`. */
+  opponentsMatching: number;
+  groupsBelowMinGames: number;
+  gamesBelowMinGames: number;
   firstGameAt: Date | null;
   lastGameAt: Date | null;
   truncated: boolean;
@@ -207,6 +245,69 @@ export class AnalyticsService {
       streaks: computeStreaks(games),
       firstGameAt: games[0]?.playedAt ?? null,
       lastGameAt: games.at(-1)?.playedAt ?? null,
+      truncated: dataset.truncated,
+      local: dataset.local,
+      warnings,
+    };
+  }
+
+  async getOpponentStatistics(query: OpponentStatisticsQuery = {}): Promise<OpponentStatistics> {
+    const color = query.color ?? 'both';
+    const minGames = query.minGames ?? (query.opponent ? 1 : DEFAULT_MIN_GAMES);
+    const limit = query.limit ?? DEFAULT_OPPONENT_LIMIT;
+    assertInteger('min_games', minGames, 1, MAX_MIN_GAMES);
+    assertInteger('limit', limit, 1, MAX_OPPONENT_LIMIT);
+    assertRange(query.from, query.until);
+
+    let opponentFilter: string | null = null;
+    if (query.opponent !== undefined) {
+      const trimmed = query.opponent.trim();
+      if (!isValidChessComUsername(trimmed)) {
+        throw new AppError('invalid_input', 'Invalid opponent Chess.com username.');
+      }
+      opponentFilter = trimmed.toLowerCase();
+    }
+
+    const dataset = await this.load(query.username, {
+      timeClass: query.timeClass,
+      color: color === 'both' ? undefined : color,
+      opponent: opponentFilter ?? undefined,
+      from: query.from,
+      until: query.until,
+    });
+    const aggregated = aggregateOpponents(dataset.games, minGames);
+    const opponents = aggregated.opponents.slice(0, limit);
+
+    const warnings = [...dataset.warnings];
+    if (dataset.local.gamesStored > 0 && dataset.games.length === 0) {
+      warnings.push(
+        opponentFilter
+          ? `No synchronized games against "${opponentFilter}" match these filters.`
+          : 'No synchronized games match these filters.',
+      );
+    }
+    if (opponents.some((row) => row.lowSample)) {
+      warnings.push(
+        `Opponents with fewer than ${LOW_SAMPLE_GAMES} games are flagged low_sample; their ` +
+          'rates are anecdotal, not strong evidence.',
+      );
+    }
+
+    return {
+      username: dataset.username,
+      opponentFilter,
+      color,
+      timeClass: query.timeClass ?? null,
+      from: query.from ?? null,
+      until: query.until ?? null,
+      minGames,
+      totals: summarizeResults(dataset.games),
+      opponents,
+      opponentsMatching: aggregated.opponents.length,
+      groupsBelowMinGames: aggregated.groupsBelowMinGames,
+      gamesBelowMinGames: aggregated.gamesBelowMinGames,
+      firstGameAt: dataset.games[0]?.playedAt ?? null,
+      lastGameAt: dataset.games.at(-1)?.playedAt ?? null,
       truncated: dataset.truncated,
       local: dataset.local,
       warnings,

@@ -9,6 +9,7 @@ export interface AnalyticsGame {
   eco: string | null;
   openingName: string | null;
   playerRating: number | null;
+  opponentUsername: string;
   opponentRating: number | null;
 }
 
@@ -51,6 +52,17 @@ export interface OpeningStat extends ResultSummary {
   lowSample: boolean;
   firstPlayedAt: Date;
   lastPlayedAt: Date;
+}
+
+export interface OpponentStat extends ResultSummary {
+  /** Display form of the opponent username (casing from the most recent game). */
+  opponentUsername: string;
+  /** True when `games` is below LOW_SAMPLE_GAMES; treat rates as anecdotal. */
+  lowSample: boolean;
+  firstPlayedAt: Date;
+  lastPlayedAt: Date;
+  averageOpponentRating: RatingAverage;
+  byColor: Record<PlayerColor, ResultSummary>;
 }
 
 export interface RatingTrend {

@@ -2,18 +2,21 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 
 import { LOW_SAMPLE_GAMES } from '../../domain/analytics.js';
-import type { RatingAverage, Streak } from '../../domain/analytics.types.js';
+import type { OpponentStat, RatingAverage, Streak } from '../../domain/analytics.types.js';
 import { PLAYER_COLORS } from '../../domain/game.types.js';
 import {
   type AnalyticsService,
   DEFAULT_MIN_GAMES,
   DEFAULT_OPENING_LIMIT,
+  DEFAULT_OPPONENT_LIMIT,
   MAX_MIN_GAMES,
   MAX_OPENING_LIMIT,
+  MAX_OPPONENT_LIMIT,
   PERIODS,
   RATING_TREND_METHOD,
   STREAK_DEFINITION,
 } from '../../services/analytics.service.js';
+import { CHESSCOM_USERNAME_PATTERN } from '../../utils/chesscom-username.js';
 import type { Logger } from '../../utils/logger.js';
 import {
   dataCoverageOutput,
@@ -113,6 +116,41 @@ export const performanceOutput = z.object({
   warnings: warningsOutput,
 });
 
+const opponentOutput = resultSummaryOutput.extend({
+  opponent: z.string(),
+  low_sample: z.boolean(),
+  first_played_at: isoDate,
+  last_played_at: isoDate,
+  average_opponent_rating: ratingAverageOutput,
+  by_color: z.object({ white: resultSummaryOutput, black: resultSummaryOutput }),
+});
+
+export const opponentStatsOutput = z.object({
+  username: z.string(),
+  source: z.literal(SOURCE_LOCAL),
+  generated_at: isoDate,
+  filters: z.object({
+    opponent: z.string().nullable(),
+    color: z.enum(['white', 'black', 'both']),
+    time_class: z.string().nullable(),
+    from_date: z.string().nullable(),
+    to_date: z.string().nullable(),
+    min_games: z.number().int(),
+    limit: z.number().int(),
+  }),
+  definitions: z.record(z.string(), z.string()),
+  totals: resultSummaryOutput.describe('All games matching the filters.'),
+  opponents: z.array(opponentOutput).describe('Most-played opponents first.'),
+  opponents_matching: z.number().int().describe('Opponents meeting min_games, before limit.'),
+  opponents_returned: z.number().int(),
+  opponents_below_min_games: z.number().int(),
+  games_below_min_games: z.number().int(),
+  date_range: dateRangeOutput,
+  truncated: z.boolean(),
+  data_coverage: dataCoverageOutput,
+  warnings: warningsOutput,
+});
+
 const ANALYTICS_ANNOTATIONS = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -127,6 +165,19 @@ const ratingAverageWire = (average: RatingAverage) => ({
 
 const streakWire = (streak: Streak | null) =>
   streak ? { length: streak.length, from: iso(streak.from), to: iso(streak.to) } : null;
+
+const opponentWire = (row: OpponentStat): z.infer<typeof opponentOutput> => ({
+  opponent: row.opponentUsername,
+  ...resultSummaryWire(row),
+  low_sample: row.lowSample,
+  first_played_at: iso(row.firstPlayedAt),
+  last_played_at: iso(row.lastPlayedAt),
+  average_opponent_rating: ratingAverageWire(row.averageOpponentRating),
+  by_color: {
+    white: resultSummaryWire(row.byColor.white),
+    black: resultSummaryWire(row.byColor.black),
+  },
+});
 
 export function registerAnalyticsTools(
   server: McpServer,
@@ -308,6 +359,116 @@ export function registerAnalyticsTools(
             `win rate ${formatPercent(results.winRate)}, score ${formatPercent(results.scorePercentage)}.`,
           data,
         };
+      }),
+  );
+
+  server.registerTool(
+    'get_opponent_statistics',
+    {
+      title: 'Opponent / head-to-head statistics',
+      description:
+        'Per-opponent results (games, wins, losses, draws, win rate, score percentage) from the ' +
+        "player's perspective, grouped by opponent username (case-insensitive), computed from " +
+        'synchronized games. Omit opponent to see who you have played most; pass opponent for a ' +
+        'head-to-head record. Optionally filter by color, time class, and date range. Opponents ' +
+        `with fewer than ${LOW_SAMPLE_GAMES} games are flagged low_sample. Requires synchronized ` +
+        'games (see sync_chesscom_games).',
+      inputSchema: z.object({
+        username: users.input,
+        opponent: z
+          .string()
+          .regex(CHESSCOM_USERNAME_PATTERN, 'Chess.com usernames use letters, digits, "_" and "-".')
+          .optional()
+          .describe(
+            'Optional. When set, return only the head-to-head vs this opponent (case-insensitive).',
+          ),
+        color: z
+          .enum([...PLAYER_COLORS, 'both'])
+          .optional()
+          .describe('Games where the player had white, black, or both (default both).'),
+        time_class: timeClassInput,
+        from_date: fromDateInput,
+        to_date: toDateInput,
+        min_games: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_MIN_GAMES)
+          .optional()
+          .describe(
+            `Hide opponents with fewer games (default ${DEFAULT_MIN_GAMES}, or 1 when opponent is set).`,
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_OPPONENT_LIMIT)
+          .optional()
+          .describe(
+            `Opponents to return (1-${MAX_OPPONENT_LIMIT}, default ${DEFAULT_OPPONENT_LIMIT}).`,
+          ),
+      }),
+      outputSchema: opponentStatsOutput,
+      annotations: { title: 'Opponent / head-to-head statistics', ...ANALYTICS_ANNOTATIONS },
+    },
+    (input) =>
+      runTool(logger, 'get_opponent_statistics', async () => {
+        const stats = await analytics.getOpponentStatistics({
+          username: users.check(input.username),
+          opponent: input.opponent,
+          color: input.color,
+          timeClass: input.time_class,
+          from: parseFromDate(input.from_date),
+          until: parseToDate(input.to_date),
+          minGames: input.min_games,
+          limit: input.limit,
+        });
+        const data: z.infer<typeof opponentStatsOutput> = {
+          username: stats.username,
+          source: SOURCE_LOCAL,
+          generated_at: iso(new Date()),
+          filters: {
+            opponent: stats.opponentFilter,
+            color: stats.color,
+            time_class: stats.timeClass,
+            from_date: input.from_date ?? null,
+            to_date: input.to_date ?? null,
+            min_games: stats.minGames,
+            limit: input.limit ?? DEFAULT_OPPONENT_LIMIT,
+          },
+          definitions: {
+            ...DEFINITIONS,
+            low_sample: `fewer than ${LOW_SAMPLE_GAMES} games`,
+            grouping: 'opponent username, case-insensitive',
+          },
+          totals: resultSummaryWire(stats.totals),
+          opponents: stats.opponents.map(opponentWire),
+          opponents_matching: stats.opponentsMatching,
+          opponents_returned: stats.opponents.length,
+          opponents_below_min_games: stats.groupsBelowMinGames,
+          games_below_min_games: stats.gamesBelowMinGames,
+          date_range: {
+            first_game_at: iso(stats.firstGameAt),
+            last_game_at: iso(stats.lastGameAt),
+          },
+          truncated: stats.truncated,
+          data_coverage: dataCoverageWire(stats.local),
+          warnings: stats.warnings,
+        };
+        const top = stats.opponents[0];
+        const summary = stats.opponentFilter
+          ? top
+            ? `Head-to-head vs ${top.opponentUsername}: ${formatCount(top.games)} games, ` +
+              `${top.wins}W/${top.losses}L/${top.draws}D, win rate ${formatPercent(top.winRate)}, ` +
+              `score ${formatPercent(top.scorePercentage)}.`
+            : `No synchronized games against "${stats.opponentFilter}" for ${stats.username}.`
+          : `${stats.opponents.length} opponent(s) with at least ${stats.minGames} games for ` +
+            `${stats.username} across ${formatCount(stats.totals.games)} games.` +
+            (top
+              ? ` Most played: ${top.opponentUsername} (${top.games} games, score ` +
+                `${formatPercent(top.scorePercentage)}).`
+              : '');
+        return { summary, data };
       }),
   );
 }

@@ -9,6 +9,7 @@ import { ChessComClient } from '../../src/clients/chesscom.client.js';
 import type { Database } from '../../src/db/client.js';
 import type {
   openingStatsOutput,
+  opponentStatsOutput,
   performanceOutput,
 } from '../../src/server/tools/analytics.tools.js';
 import type { gameDetailsOutput, recentGamesOutput } from '../../src/server/tools/games.tools.js';
@@ -61,6 +62,7 @@ interface Outputs {
   get_recent_games: z.infer<typeof recentGamesOutput>;
   get_game_details: z.infer<typeof gameDetailsOutput>;
   get_opening_statistics: z.infer<typeof openingStatsOutput>;
+  get_opponent_statistics: z.infer<typeof opponentStatsOutput>;
   get_performance_summary: z.infer<typeof performanceOutput>;
 }
 
@@ -144,11 +146,12 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
     await database?.close();
   });
 
-  it('lists the seven tools with input/output schemas and annotations', async () => {
+  it('lists the tools with input/output schemas and annotations', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'get_game_details',
       'get_opening_statistics',
+      'get_opponent_statistics',
       'get_performance_summary',
       'get_player_profile',
       'get_player_stats',
@@ -166,6 +169,9 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
     expect(sync.inputSchema.properties?.months).toMatchObject({ minimum: 1, maximum: 6 });
     const opening = tools.find((tool) => tool.name === 'get_opening_statistics')!;
     expect(opening.inputSchema.required).toEqual(['color']);
+    const opponents = tools.find((tool) => tool.name === 'get_opponent_statistics')!;
+    expect(opponents.annotations?.idempotentHint).toBe(true);
+    expect(opponents.annotations?.openWorldHint).toBe(false);
   });
 
   describe('before any sync', () => {
@@ -430,6 +436,65 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
     it('requires color', async () => {
       const { result } = await call('get_opening_statistics', {});
       expect(result.isError).toBe(true);
+    });
+  });
+
+  describe('get_opponent_statistics', () => {
+    it('ranks opponents by games played with low_sample flags', async () => {
+      const { text, data } = await call('get_opponent_statistics', { min_games: 1 });
+      expect(text[0]).toMatch(/Most played: opponent \(4 games/);
+      expect(data.totals.games).toBe(7);
+      expect(data.opponents.map((row) => [row.opponent, row.games, row.score_percentage])).toEqual([
+        ['opponent', 4, 100],
+        ['unrated', 1, 100],
+        ['drawer', 1, 50],
+        ['opp', 1, 0],
+      ]);
+      expect(data.opponents[0]).toMatchObject({
+        opponent: 'opponent',
+        wins: 4,
+        losses: 0,
+        draws: 0,
+        win_rate: 100,
+        score_percentage: 100,
+        low_sample: true,
+        by_color: {
+          white: { games: 3, wins: 3 },
+          black: { games: 1, wins: 1 },
+        },
+      });
+      expect(data.definitions.grouping).toMatch(/case-insensitive/);
+      expect(data.warnings.some((warning: string) => warning.includes('low_sample'))).toBe(true);
+    });
+
+    it('returns a head-to-head when opponent is set and defaults min_games to 1', async () => {
+      const { text, data } = await call('get_opponent_statistics', { opponent: 'OPPONENT' });
+      expect(text[0]).toBe(
+        'Head-to-head vs opponent: 4 games, 4W/0L/0D, win rate 100%, score 100%.',
+      );
+      expect(data.filters).toMatchObject({ opponent: 'opponent', min_games: 1 });
+      expect(data.opponents).toHaveLength(1);
+      expect(data.opponents[0]).toMatchObject({ opponent: 'opponent', games: 4, wins: 4 });
+    });
+
+    it('filters by color and hides opponents below min_games', async () => {
+      const black = await call('get_opponent_statistics', { color: 'black', min_games: 1 });
+      expect(black.data.totals.games).toBe(2);
+      expect(black.data.opponents.map((row) => row.opponent).sort()).toEqual(['opp', 'opponent']);
+
+      const filtered = await call('get_opponent_statistics');
+      expect(filtered.data.filters.min_games).toBe(3);
+      expect(filtered.data.opponents).toEqual([
+        expect.objectContaining({ opponent: 'opponent', games: 4 }),
+      ]);
+      expect(filtered.data.games_below_min_games).toBe(3);
+    });
+
+    it('reports when a specific opponent has no matching games', async () => {
+      const { text, data } = await call('get_opponent_statistics', { opponent: 'nobody' });
+      expect(text[0]).toMatch(/No synchronized games against "nobody"/);
+      expect(data.opponents).toEqual([]);
+      expect(data.warnings.some((warning: string) => warning.includes('nobody'))).toBe(true);
     });
   });
 
