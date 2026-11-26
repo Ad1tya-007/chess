@@ -4,6 +4,7 @@ import {
   aggregateOpenings,
   aggregateOpponents,
   averageRating,
+  breakdownByTermination,
   buildOpeningMoveTree,
   computeStreaks,
   LOW_SAMPLE_GAMES,
@@ -20,6 +21,8 @@ function game(overrides: Partial<AnalyticsGame> = {}): AnalyticsGame {
   return {
     playedAt: new Date(Date.UTC(2026, 0, 1) + day * 86_400_000),
     result: 'win',
+    playerResultCode: 'win',
+    termination: 'checkmated',
     playerColor: 'white',
     timeClass: 'blitz',
     eco: 'B12',
@@ -371,6 +374,72 @@ describe('ratingTrends', () => {
       firstRating: null,
       change: null,
       minRating: null,
+    });
+  });
+});
+
+describe('breakdownByTermination', () => {
+  it('groups wins by opponent loss code and losses/draws by player code', () => {
+    const games = [
+      game({ result: 'win', playerResultCode: 'win', termination: 'checkmated' }),
+      game({ result: 'win', playerResultCode: 'win', termination: 'resigned' }),
+      game({ result: 'win', playerResultCode: 'win', termination: 'checkmated' }),
+      game({ result: 'loss', playerResultCode: 'timeout', termination: 'timeout' }),
+      game({ result: 'loss', playerResultCode: 'resigned', termination: 'resigned' }),
+      game({ result: 'loss', playerResultCode: 'timeout', termination: 'timeout' }),
+      game({ result: 'draw', playerResultCode: 'agreed', termination: 'agreed' }),
+    ];
+
+    expect(breakdownByTermination(games)).toEqual({
+      totals: {
+        games: 7,
+        wins: 3,
+        losses: 3,
+        draws: 1,
+        winRate: 42.9,
+        scorePercentage: 50,
+      },
+      wins: [
+        { code: 'checkmated', games: 2, percentage: 66.7 },
+        { code: 'resigned', games: 1, percentage: 33.3 },
+      ],
+      losses: [
+        { code: 'timeout', games: 2, percentage: 66.7 },
+        { code: 'resigned', games: 1, percentage: 33.3 },
+      ],
+      draws: [{ code: 'agreed', games: 1, percentage: 100 }],
+      missingTermination: 0,
+    });
+  });
+
+  it('counts null terminations honestly and still includes them in totals', () => {
+    const games = [
+      game({ result: 'win', playerResultCode: 'win', termination: 'checkmated' }),
+      game({ result: 'win', playerResultCode: null, termination: null }),
+      game({ result: 'loss', playerResultCode: null, termination: null }),
+    ];
+
+    const breakdown = breakdownByTermination(games);
+    expect(breakdown.totals).toMatchObject({ games: 3, wins: 2, losses: 1, draws: 0 });
+    expect(breakdown.wins).toEqual([{ code: 'checkmated', games: 1, percentage: 50 }]);
+    expect(breakdown.losses).toEqual([]);
+    expect(breakdown.missingTermination).toBe(2);
+  });
+
+  it('returns empty buckets for an empty dataset', () => {
+    expect(breakdownByTermination([])).toEqual({
+      totals: {
+        games: 0,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        winRate: null,
+        scorePercentage: null,
+      },
+      wins: [],
+      losses: [],
+      draws: [],
+      missingTermination: 0,
     });
   });
 });

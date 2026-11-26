@@ -23,6 +23,16 @@ export interface NormalizedGame {
   whiteRating: number | null;
   blackRating: number | null;
   result: GameResult;
+  /**
+   * Player's Chess.com result code (win, resigned, timeout, agreed, …).
+   * Null when the code was unknown and the win/loss/draw came only from PGN or the opponent.
+   */
+  playerResultCode: string | null;
+  /**
+   * How the game ended for aggregation: opponent's loss code when the player won, otherwise the
+   * player's own code (loss/draw reason). Null when no known Chess.com code is available.
+   */
+  termination: string | null;
   playerColor: PlayerColor;
   opponentUsername: string;
   opponentRating: number | null;

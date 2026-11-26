@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as z from 'zod/v4';
 
@@ -12,6 +13,7 @@ import type {
   openingStatsOutput,
   opponentStatsOutput,
   performanceOutput,
+  resultBreakdownOutput,
 } from '../../src/server/tools/analytics.tools.js';
 import type { gameDetailsOutput, recentGamesOutput } from '../../src/server/tools/games.tools.js';
 import type { profileOutput, statsOutput } from '../../src/server/tools/player.tools.js';
@@ -67,6 +69,7 @@ interface Outputs {
   get_opening_move_tree: z.infer<typeof openingMoveTreeOutput>;
   get_opponent_statistics: z.infer<typeof opponentStatsOutput>;
   get_performance_summary: z.infer<typeof performanceOutput>;
+  get_result_breakdown: z.infer<typeof resultBreakdownOutput>;
 }
 
 describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () => {
@@ -160,6 +163,7 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
       'get_player_profile',
       'get_player_stats',
       'get_recent_games',
+      'get_result_breakdown',
       'sync_chesscom_games',
     ]);
     for (const tool of tools) {
@@ -344,6 +348,8 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
       ]);
       expect(data.games[1]).toMatchObject({
         result: 'win',
+        player_result_code: 'win',
+        termination: 'checkmated',
         color: 'black',
         opponent: 'opponent',
         player_rating: 1510,
@@ -750,6 +756,39 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
       });
       expect(control.data.results.games).toBe(1);
       expect(control.data.time_control).toBe('60');
+    });
+  });
+
+  describe('get_result_breakdown', () => {
+    it('breaks results down by Chess.com termination codes', async () => {
+      const { text, data } = await call('get_result_breakdown', { period: 'all' });
+      expect(data.results).toMatchObject({ games: 7, wins: 5, losses: 1, draws: 1 });
+      expect(data.wins).toEqual([
+        expect.objectContaining({ code: 'checkmated', games: 4 }),
+        expect.objectContaining({ code: 'resigned', games: 1 }),
+      ]);
+      expect(data.losses).toEqual([expect.objectContaining({ code: 'resigned', games: 1 })]);
+      expect(data.draws).toEqual([expect.objectContaining({ code: 'agreed', games: 1 })]);
+      expect(data.missing_termination).toBe(0);
+      expect(data.definitions.termination).toMatch(/opponent's loss code/i);
+      expect(text[0]).toMatch(/most common loss: resigned/);
+    });
+
+    it('warns honestly when stored games lack termination codes', async () => {
+      const player = await services.repositories.players.getOrCreate('testplayer');
+      const recent = await services.games.getRecentGames({ limit: 1 });
+      const url = recent.games[0]!.chesscomGameUrl;
+      await database.db.execute(
+        sql`update games set player_result_code = null, termination = null
+            where chesscom_game_url = ${url} and player_id = ${player.id}`,
+      );
+
+      const { data } = await call('get_result_breakdown', { period: 'all' });
+      expect(data.missing_termination).toBe(1);
+      expect(data.warnings.some((warning) => warning.includes('lack a termination code'))).toBe(
+        true,
+      );
+      expect(data.warnings.some((warning) => warning.includes('Re-sync'))).toBe(true);
     });
   });
 

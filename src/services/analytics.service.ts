@@ -2,6 +2,7 @@ import {
   aggregateOpenings,
   aggregateOpponents,
   averageRating,
+  breakdownByTermination,
   buildOpeningMoveTree,
   computeStreaks,
   DEFAULT_MOVE_TREE_MAX_CHILDREN,
@@ -19,6 +20,7 @@ import type {
   OpponentStat,
   RatingAverage,
   RatingTrend,
+  ResultBreakdown,
   ResultSummary,
   StreakSummary,
 } from '../domain/analytics.types.js';
@@ -198,6 +200,35 @@ export interface OpponentStatistics {
   local: LocalDataStatus;
   warnings: string[];
 }
+
+export interface ResultBreakdownQuery {
+  username?: string | undefined;
+  period?: Period | undefined;
+  timeClass?: TimeClass | undefined;
+  color?: PlayerColor | 'both' | undefined;
+  from?: Date | undefined;
+  until?: Date | undefined;
+}
+
+export interface ResultBreakdownSummary {
+  username: string;
+  period: Period | 'custom';
+  periodStart: Date | null;
+  periodEnd: Date | null;
+  timeClass: TimeClass | null;
+  color: PlayerColor | 'both';
+  breakdown: ResultBreakdown;
+  firstGameAt: Date | null;
+  lastGameAt: Date | null;
+  truncated: boolean;
+  local: LocalDataStatus;
+  warnings: string[];
+}
+
+export const TERMINATION_DEFINITION =
+  "How the game ended using Chess.com result codes: on wins, the opponent's loss code " +
+  "(checkmated, resigned, timeout, …); on losses and draws, the player's own code. Null when " +
+  'the code was never stored (pre-migration rows) or only a PGN Result tag was available.';
 
 export interface AnalyticsServiceDependencies {
   games: GameRepository;
@@ -438,6 +469,66 @@ export class AnalyticsService {
       gamesBelowMinGames: aggregated.gamesBelowMinGames,
       firstGameAt: dataset.games[0]?.playedAt ?? null,
       lastGameAt: dataset.games.at(-1)?.playedAt ?? null,
+      truncated: dataset.truncated,
+      local: dataset.local,
+      warnings,
+    };
+  }
+
+  async getResultBreakdown(query: ResultBreakdownQuery = {}): Promise<ResultBreakdownSummary> {
+    assertRange(query.from, query.until);
+
+    const hasCustomDates = query.from !== undefined || query.until !== undefined;
+    let period: Period | 'custom';
+    let periodStart: Date | null;
+    let periodEnd: Date | null;
+    if (hasCustomDates) {
+      period = 'custom';
+      periodStart = query.from ?? null;
+      periodEnd = query.until ?? null;
+    } else {
+      period = query.period ?? '30d';
+      periodEnd = this.now();
+      periodStart =
+        period === 'all' ? null : new Date(periodEnd.getTime() - PERIOD_DAYS[period] * 86_400_000);
+    }
+
+    const color = query.color === 'both' ? undefined : query.color;
+    const dataset = await this.load(query.username, {
+      timeClass: query.timeClass,
+      color,
+      from: periodStart ?? undefined,
+      until: periodEnd ?? undefined,
+    });
+    const { games } = dataset;
+    const breakdown = breakdownByTermination(games);
+
+    const warnings = [...dataset.warnings];
+    if (dataset.local.gamesStored > 0 && games.length === 0) {
+      warnings.push(
+        hasCustomDates
+          ? 'No synchronized games match these filters.'
+          : `No synchronized games in the selected period (${period}).`,
+      );
+    }
+    if (breakdown.missingTermination > 0) {
+      warnings.push(
+        `${breakdown.missingTermination} game(s) lack a termination code (synced before ` +
+          'termination was stored, or inferred only from the PGN Result tag). Re-sync those ' +
+          'months with sync_chesscom_games to backfill Chess.com result codes when available.',
+      );
+    }
+
+    return {
+      username: dataset.username,
+      period,
+      periodStart,
+      periodEnd,
+      timeClass: query.timeClass ?? null,
+      color: query.color ?? 'both',
+      breakdown,
+      firstGameAt: games[0]?.playedAt ?? null,
+      lastGameAt: games.at(-1)?.playedAt ?? null,
       truncated: dataset.truncated,
       local: dataset.local,
       warnings,

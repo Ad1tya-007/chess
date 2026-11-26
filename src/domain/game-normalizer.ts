@@ -42,13 +42,34 @@ const OPENINGS_URL_PREFIX = 'https://www.chess.com/openings/';
 const MOVE_SEGMENT = /^\.{0,3}\d+\./;
 const MAX_RATING = 5000;
 
+/** Known Chess.com result codes (lowercase), or null when unrecognized. */
+export function normalizeResultCode(code: string): string | null {
+  const normalized = code.trim().toLowerCase();
+  if (WIN_CODES.has(normalized) || LOSS_CODES.has(normalized) || DRAW_CODES.has(normalized)) {
+    return normalized;
+  }
+  return null;
+}
+
 /** Maps one player's Chess.com result code to that player's result; null when unknown. */
 export function mapResultCode(code: string): GameResult | null {
-  const normalized = code.trim().toLowerCase();
+  const normalized = normalizeResultCode(code);
+  if (!normalized) return null;
   if (WIN_CODES.has(normalized)) return 'win';
   if (LOSS_CODES.has(normalized)) return 'loss';
-  if (DRAW_CODES.has(normalized)) return 'draw';
-  return null;
+  return 'draw';
+}
+
+/**
+ * Termination reason used for breakdowns: how the opponent lost when the player won, otherwise
+ * the player's own Chess.com code (loss/draw). Null when neither side supplies a known code.
+ */
+export function deriveTermination(
+  result: GameResult,
+  playerCode: string | null,
+  opponentCode: string | null,
+): string | null {
+  return result === 'win' ? opponentCode : playerCode;
 }
 
 const invert = (result: GameResult | null): GameResult | null =>
@@ -153,6 +174,8 @@ export function normalizeArchiveGame(
   const player: ChessComGamePlayer = playerColor === 'white' ? game.white : game.black;
   const opponent: ChessComGamePlayer = playerColor === 'white' ? game.black : game.white;
 
+  const playerResultCode = normalizeResultCode(player.resultCode);
+  const opponentResultCode = normalizeResultCode(opponent.resultCode);
   const candidates = [
     mapResultCode(player.resultCode),
     invert(mapResultCode(opponent.resultCode)),
@@ -178,6 +201,7 @@ export function normalizeArchiveGame(
 
   const whiteRating = game.white.rating ?? parseRating(parsed.headers.WhiteElo);
   const blackRating = game.black.rating ?? parseRating(parsed.headers.BlackElo);
+  const termination = deriveTermination(result, playerResultCode, opponentResultCode);
 
   return {
     ok: true,
@@ -193,6 +217,8 @@ export function normalizeArchiveGame(
       whiteRating,
       blackRating,
       result,
+      playerResultCode,
+      termination,
       playerColor,
       opponentUsername: opponent.username,
       opponentRating: playerColor === 'white' ? blackRating : whiteRating,

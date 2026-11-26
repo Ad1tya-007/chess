@@ -29,6 +29,16 @@ const gameSummaryOutput = z.object({
   game_url: z.string(),
   played_at: isoDate.describe('When the game ended.'),
   result: z.enum(GAME_RESULTS).describe("From the player's perspective."),
+  player_result_code: z
+    .string()
+    .nullable()
+    .describe("Player's Chess.com result code (win, resigned, timeout, …); null if unknown."),
+  termination: z
+    .string()
+    .nullable()
+    .describe(
+      "How the game ended: opponent's loss code on wins, player's code on losses/draws; null if unknown.",
+    ),
   color: z.enum(PLAYER_COLORS),
   opponent: z.string(),
   opponent_rating: z.number().int().nullable(),
@@ -45,6 +55,8 @@ function gameSummaryWire(game: GameSummaryRow): z.infer<typeof gameSummaryOutput
     game_url: game.chesscomGameUrl,
     played_at: iso(game.playedAt),
     result: game.result,
+    player_result_code: game.playerResultCode,
+    termination: game.termination,
     color: game.playerColor,
     opponent: game.opponentUsername,
     opponent_rating: game.opponentRating,

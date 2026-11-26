@@ -7,6 +7,7 @@ import type {
   OpponentStat,
   RatingAverage,
   Streak,
+  TerminationCount,
 } from '../../domain/analytics.types.js';
 import { PLAYER_COLORS } from '../../domain/game.types.js';
 import {
@@ -24,6 +25,7 @@ import {
   PERIODS,
   RATING_TREND_METHOD,
   STREAK_DEFINITION,
+  TERMINATION_DEFINITION,
 } from '../../services/analytics.service.js';
 import { CHESSCOM_USERNAME_PATTERN } from '../../utils/chesscom-username.js';
 import type { Logger } from '../../utils/logger.js';
@@ -92,6 +94,43 @@ const ratingAverageOutput = z.object({
 });
 
 const streakOutput = z.object({ length: z.number().int(), from: isoDate, to: isoDate }).nullable();
+
+const terminationCountOutput = z.object({
+  code: z.string().describe('Chess.com result code (checkmated, resigned, timeout, agreed, …).'),
+  games: z.number().int(),
+  percentage: z
+    .number()
+    .nullable()
+    .describe('Share of that result bucket (wins/losses/draws), one decimal; null if empty.'),
+});
+
+export const resultBreakdownOutput = z.object({
+  username: z.string(),
+  source: z.literal(SOURCE_LOCAL),
+  generated_at: isoDate,
+  period: z.enum([...PERIODS, 'custom']),
+  period_start: nullableIsoDate,
+  period_end: nullableIsoDate,
+  time_class: z.string().nullable(),
+  color: z.enum(['white', 'black', 'both']),
+  definitions: z.record(z.string(), z.string()),
+  results: resultSummaryOutput,
+  wins: z
+    .array(terminationCountOutput)
+    .describe("How wins ended (opponent's loss code). Most frequent first."),
+  losses: z
+    .array(terminationCountOutput)
+    .describe("How losses ended (player's own code). Most frequent first."),
+  draws: z.array(terminationCountOutput).describe('How draws ended. Most frequent first.'),
+  missing_termination: z
+    .number()
+    .int()
+    .describe('Games with no stored termination code; not guessed.'),
+  date_range: dateRangeOutput,
+  truncated: z.boolean(),
+  data_coverage: dataCoverageOutput,
+  warnings: warningsOutput,
+});
 
 export const performanceOutput = z.object({
   username: z.string(),
@@ -255,6 +294,12 @@ const opponentWire = (row: OpponentStat): z.infer<typeof opponentOutput> => ({
     white: resultSummaryWire(row.byColor.white),
     black: resultSummaryWire(row.byColor.black),
   },
+});
+
+const terminationCountWire = (row: TerminationCount) => ({
+  code: row.code,
+  games: row.games,
+  percentage: row.percentage,
 });
 
 export function registerAnalyticsTools(
@@ -677,6 +722,88 @@ export function registerAnalyticsTools(
                 `${formatPercent(top.scorePercentage)}).`
               : '');
         return { summary, data };
+      }),
+  );
+
+  server.registerTool(
+    'get_result_breakdown',
+    {
+      title: 'Result / termination breakdown',
+      description:
+        'Break synchronized results down by Chess.com termination reason: how wins ended ' +
+        "(opponent's loss code: checkmated, resigned, timeout, …), how losses ended (player's " +
+        'own code), and how draws ended. Answers questions like "do I time out a lot?" or "am I ' +
+        'resigning too early?". Games without a stored code are counted in missing_termination ' +
+        'and never guessed — re-sync those months to backfill. Filter by period (7d/30d/90d/all), ' +
+        'optional from_date/to_date, time class, and color. Requires synchronized games.',
+      inputSchema: z.object({
+        username: users.input,
+        period: z.enum(PERIODS).optional().describe('7d, 30d (default), 90d, or all.'),
+        time_class: timeClassInput,
+        color: z
+          .enum([...PLAYER_COLORS, 'both'])
+          .optional()
+          .describe('Games where the player had white, black, or both (default both).'),
+        from_date: fromDateInput,
+        to_date: toDateInput,
+      }),
+      outputSchema: resultBreakdownOutput,
+      annotations: { title: 'Result / termination breakdown', ...ANALYTICS_ANNOTATIONS },
+    },
+    (input) =>
+      runTool(logger, 'get_result_breakdown', async () => {
+        const summary = await analytics.getResultBreakdown({
+          username: users.check(input.username),
+          period: input.period,
+          timeClass: input.time_class,
+          color: input.color,
+          from: parseFromDate(input.from_date),
+          until: parseToDate(input.to_date),
+        });
+        const { breakdown } = summary;
+        const data: z.infer<typeof resultBreakdownOutput> = {
+          username: summary.username,
+          source: SOURCE_LOCAL,
+          generated_at: iso(new Date()),
+          period: summary.period,
+          period_start: iso(summary.periodStart),
+          period_end: iso(summary.periodEnd),
+          time_class: summary.timeClass,
+          color: summary.color,
+          definitions: {
+            ...DEFINITIONS,
+            termination: TERMINATION_DEFINITION,
+            missing_termination:
+              'Games with a null termination code; percentages within each result bucket still ' +
+              'use the full bucket size, so known-code shares may not sum to 100%.',
+          },
+          results: resultSummaryWire(breakdown.totals),
+          wins: breakdown.wins.map(terminationCountWire),
+          losses: breakdown.losses.map(terminationCountWire),
+          draws: breakdown.draws.map(terminationCountWire),
+          missing_termination: breakdown.missingTermination,
+          date_range: {
+            first_game_at: iso(summary.firstGameAt),
+            last_game_at: iso(summary.lastGameAt),
+          },
+          truncated: summary.truncated,
+          data_coverage: dataCoverageWire(summary.local),
+          warnings: summary.warnings,
+        };
+        const topLoss = breakdown.losses[0];
+        return {
+          summary:
+            `${summary.username}, ${summary.period}: ${formatCount(breakdown.totals.games)} games, ` +
+            `${breakdown.totals.wins}W/${breakdown.totals.losses}L/${breakdown.totals.draws}D` +
+            (topLoss
+              ? `; most common loss: ${topLoss.code} (${topLoss.games}, ${formatPercent(topLoss.percentage)})`
+              : '') +
+            (breakdown.missingTermination > 0
+              ? `; ${breakdown.missingTermination} missing termination`
+              : '') +
+            '.',
+          data,
+        };
       }),
   );
 }

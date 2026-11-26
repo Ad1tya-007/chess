@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  deriveTermination,
   detectPlayerColor,
   mapPgnResult,
   mapResultCode,
   normalizeArchiveGame,
   normalizeArchiveGames,
   normalizeEco,
+  normalizeResultCode,
   normalizeTimeClass,
   normalizeTimeControl,
   openingNameFromUrl,
@@ -23,6 +25,19 @@ function expectRejected(outcome: NormalizeOutcome): string {
   if (outcome.ok) throw new Error('Expected the game to be rejected');
   return outcome.reason;
 }
+
+describe('normalizeResultCode', () => {
+  it.each(['win', 'WIN', ' resigned ', 'Timeout', 'agreed'])(
+    'keeps known code %j lowercase',
+    (code) => {
+      expect(normalizeResultCode(code)).toBe(code.trim().toLowerCase());
+    },
+  );
+
+  it.each(['', 'unknown', 'drawn', 'draw'])('returns null for unknown %j', (code) => {
+    expect(normalizeResultCode(code)).toBeNull();
+  });
+});
 
 describe('mapResultCode', () => {
   it.each(['win', 'WIN', ' win '])('maps %j to win', (code) => {
@@ -51,6 +66,19 @@ describe('mapResultCode', () => {
 
   it.each(['', 'unknown', 'drawn', 'draw'])('does not guess for %j', (code) => {
     expect(mapResultCode(code)).toBeNull();
+  });
+});
+
+describe('deriveTermination', () => {
+  it('uses the opponent code for wins and the player code otherwise', () => {
+    expect(deriveTermination('win', 'win', 'checkmated')).toBe('checkmated');
+    expect(deriveTermination('loss', 'timeout', 'win')).toBe('timeout');
+    expect(deriveTermination('draw', 'agreed', 'agreed')).toBe('agreed');
+  });
+
+  it('stays null when the relevant code is missing', () => {
+    expect(deriveTermination('win', 'win', null)).toBeNull();
+    expect(deriveTermination('loss', null, 'win')).toBeNull();
   });
 });
 
@@ -158,6 +186,8 @@ describe('normalizeArchiveGame', () => {
     expect(warnings).toEqual([]);
     expect(game).toMatchObject({
       result: 'win',
+      playerResultCode: 'win',
+      termination: 'checkmated',
       playerColor: 'white',
       opponentUsername: 'opponent',
       opponentRating: 1620,
@@ -177,6 +207,8 @@ describe('normalizeArchiveGame', () => {
     const { game } = expectOk(normalizeArchiveGame(fixtures.blackWin(), 'TESTPLAYER'));
     expect(game).toMatchObject({
       result: 'win',
+      playerResultCode: 'win',
+      termination: 'checkmated',
       playerColor: 'black',
       opponentUsername: 'opponent',
       opponentRating: 1500,
@@ -189,12 +221,24 @@ describe('normalizeArchiveGame', () => {
 
   it('records a loss for the configured player when the opponent won', () => {
     const { game } = expectOk(normalizeArchiveGame(fixtures.missingEcoAndOpening(), PLAYER));
-    expect(game).toMatchObject({ result: 'loss', playerColor: 'black', opponentRating: 1700 });
+    expect(game).toMatchObject({
+      result: 'loss',
+      playerResultCode: 'resigned',
+      termination: 'resigned',
+      playerColor: 'black',
+      opponentRating: 1700,
+    });
   });
 
   it('normalizes a draw', () => {
     const { game } = expectOk(normalizeArchiveGame(fixtures.draw(), PLAYER));
-    expect(game).toMatchObject({ result: 'draw', timeClass: 'bullet', eco: 'D00' });
+    expect(game).toMatchObject({
+      result: 'draw',
+      playerResultCode: 'agreed',
+      termination: 'agreed',
+      timeClass: 'bullet',
+      eco: 'D00',
+    });
   });
 
   it('keeps missing ratings and rated status as null', () => {
@@ -242,7 +286,26 @@ describe('normalizeArchiveGame', () => {
       black: { username: 'opponent', rating: 1620, resultCode: 'win', uuid: null },
       pgn: buildPgn({ white: PLAYER, black: 'opponent', result: '0-1', moves: '1. e4 e5' }),
     });
-    expect(expectOk(normalizeArchiveGame(game, PLAYER)).game.result).toBe('loss');
+    const normalized = expectOk(normalizeArchiveGame(game, PLAYER)).game;
+    expect(normalized).toMatchObject({
+      result: 'loss',
+      playerResultCode: null,
+      termination: null,
+    });
+  });
+
+  it('leaves termination null when a win is inferred only from the PGN Result tag', () => {
+    const game = archiveGame({
+      white: { username: PLAYER, rating: 1640, resultCode: 'mystery', uuid: null },
+      black: { username: 'opponent', rating: 1620, resultCode: 'other', uuid: null },
+      pgn: buildPgn({ white: PLAYER, black: 'opponent', result: '1-0', moves: '1. e4 e5' }),
+    });
+    const normalized = expectOk(normalizeArchiveGame(game, PLAYER)).game;
+    expect(normalized).toMatchObject({
+      result: 'win',
+      playerResultCode: null,
+      termination: null,
+    });
   });
 
   it('does not infer a draw from unknown results', () => {

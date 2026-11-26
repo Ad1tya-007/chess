@@ -66,6 +66,13 @@ export const games = pgTable(
     blackRating: integer('black_rating'),
     /** Normalized from the configured player's perspective. */
     result: gameResultEnum('result').notNull(),
+    /** Player's Chess.com result code; null for pre-migration rows or unknown codes. */
+    playerResultCode: text('player_result_code'),
+    /**
+     * How the game ended (opponent loss code on wins; player's code on losses/draws).
+     * Null for pre-migration rows or when only a PGN Result tag was available.
+     */
+    termination: text('termination'),
     playerColor: playerColorEnum('player_color').notNull(),
     opponentUsername: text('opponent_username').notNull(),
     opponentRating: integer('opponent_rating'),
@@ -89,6 +96,7 @@ export const games = pgTable(
     index('games_player_eco_idx').on(table.playerId, table.eco),
     index('games_player_opponent_username_idx').on(table.playerId, table.opponentUsername),
     index('games_player_rated_idx').on(table.playerId, table.rated),
+    index('games_player_termination_idx').on(table.playerId, table.termination),
   ],
 );
 
