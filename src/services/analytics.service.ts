@@ -2,13 +2,19 @@ import {
   aggregateOpenings,
   aggregateOpponents,
   averageRating,
+  buildOpeningMoveTree,
   computeStreaks,
+  DEFAULT_MOVE_TREE_MAX_CHILDREN,
+  DEFAULT_MOVE_TREE_MAX_PLY,
   LOW_SAMPLE_GAMES,
+  MAX_MOVE_TREE_MAX_CHILDREN,
+  MAX_MOVE_TREE_MAX_PLY,
   ratingTrends,
   summarizeResults,
 } from '../domain/analytics.js';
 import type {
   AnalyticsGame,
+  OpeningMoveTreeNode,
   OpeningStat,
   OpponentStat,
   RatingAverage,
@@ -22,6 +28,13 @@ import { isValidChessComUsername, resolveUsername } from '../utils/chesscom-user
 import { AppError } from '../utils/errors.js';
 import { assertInteger, assertRange } from './game.service.js';
 import type { LocalDataService, LocalDataStatus } from './local-data.service.js';
+
+export {
+  DEFAULT_MOVE_TREE_MAX_CHILDREN,
+  DEFAULT_MOVE_TREE_MAX_PLY,
+  MAX_MOVE_TREE_MAX_CHILDREN,
+  MAX_MOVE_TREE_MAX_PLY,
+};
 
 /** Analytics consider at most this many of the most recent matching games. */
 export const MAX_ANALYTICS_GAMES = 50_000;
@@ -87,6 +100,38 @@ export interface PerformanceSummaryQuery {
   username?: string | undefined;
   period?: Period | undefined;
   timeClass?: TimeClass | undefined;
+}
+
+export interface OpeningMoveTreeQuery {
+  username?: string | undefined;
+  color: PlayerColor | 'both';
+  timeClass?: TimeClass | undefined;
+  from?: Date | undefined;
+  until?: Date | undefined;
+  maxPly?: number | undefined;
+  minGames?: number | undefined;
+  maxChildren?: number | undefined;
+}
+
+export interface OpeningMoveTreeStatistics {
+  username: string;
+  color: PlayerColor | 'both';
+  timeClass: TimeClass | null;
+  from: Date | null;
+  until: Date | null;
+  maxPly: number;
+  minGames: number;
+  maxChildren: number;
+  totals: ResultSummary;
+  root: OpeningMoveTreeNode;
+  gamesWithMoves: number;
+  gamesMissingMoves: number;
+  nodesReturned: number;
+  firstGameAt: Date | null;
+  lastGameAt: Date | null;
+  truncated: boolean;
+  local: LocalDataStatus;
+  warnings: string[];
 }
 
 export interface PerformanceSummary {
@@ -196,6 +241,65 @@ export class AnalyticsService {
       openingsMatching: aggregated.openings.length,
       groupsBelowMinGames: aggregated.groupsBelowMinGames,
       gamesBelowMinGames: aggregated.gamesBelowMinGames,
+      firstGameAt: dataset.games[0]?.playedAt ?? null,
+      lastGameAt: dataset.games.at(-1)?.playedAt ?? null,
+      truncated: dataset.truncated,
+      local: dataset.local,
+      warnings,
+    };
+  }
+
+  async getOpeningMoveTree(query: OpeningMoveTreeQuery): Promise<OpeningMoveTreeStatistics> {
+    const maxPly = query.maxPly ?? DEFAULT_MOVE_TREE_MAX_PLY;
+    const minGames = query.minGames ?? DEFAULT_MIN_GAMES;
+    const maxChildren = query.maxChildren ?? DEFAULT_MOVE_TREE_MAX_CHILDREN;
+    assertInteger('max_ply', maxPly, 1, MAX_MOVE_TREE_MAX_PLY);
+    assertInteger('min_games', minGames, 1, MAX_MIN_GAMES);
+    assertInteger('max_children', maxChildren, 1, MAX_MOVE_TREE_MAX_CHILDREN);
+    assertRange(query.from, query.until);
+
+    const dataset = await this.load(query.username, {
+      timeClass: query.timeClass,
+      color: query.color === 'both' ? undefined : query.color,
+      from: query.from,
+      until: query.until,
+    });
+    const tree = buildOpeningMoveTree(dataset.games, { maxPly, minGames, maxChildren });
+
+    const warnings = [...dataset.warnings];
+    if (dataset.local.gamesStored > 0 && dataset.games.length === 0) {
+      warnings.push('No synchronized games match these filters.');
+    }
+    if (tree.gamesMissingMoves > 0) {
+      warnings.push(
+        `${tree.gamesMissingMoves} game(s) were skipped because san_moves could not be parsed; ` +
+          're-sync those months or inspect them with get_game_details.',
+      );
+    }
+    if (tree.gamesWithMoves === 0 && dataset.games.length > 0) {
+      warnings.push('No filtered games have parsed SAN moves to build a move tree.');
+    }
+    if (hasLowSampleNode(tree.root)) {
+      warnings.push(
+        `Nodes with fewer than ${LOW_SAMPLE_GAMES} games are flagged low_sample; their rates ` +
+          'are anecdotal, not strong evidence.',
+      );
+    }
+
+    return {
+      username: dataset.username,
+      color: query.color,
+      timeClass: query.timeClass ?? null,
+      from: query.from ?? null,
+      until: query.until ?? null,
+      maxPly,
+      minGames,
+      maxChildren,
+      totals: summarizeResults(dataset.games),
+      root: tree.root,
+      gamesWithMoves: tree.gamesWithMoves,
+      gamesMissingMoves: tree.gamesMissingMoves,
+      nodesReturned: tree.nodesReturned,
       firstGameAt: dataset.games[0]?.playedAt ?? null,
       lastGameAt: dataset.games.at(-1)?.playedAt ?? null,
       truncated: dataset.truncated,
@@ -335,4 +439,9 @@ export class AnalyticsService {
     }
     return { username: resolved, local, games, truncated, warnings };
   }
+}
+
+function hasLowSampleNode(node: OpeningMoveTreeNode): boolean {
+  if (node.games > 0 && node.lowSample) return true;
+  return node.children.some(hasLowSampleNode);
 }

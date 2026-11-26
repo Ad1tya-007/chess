@@ -208,6 +208,7 @@ export class GameRepository {
         playerRating: PLAYER_RATING,
         opponentUsername: games.opponentUsername,
         opponentRating: games.opponentRating,
+        sanMoves: games.sanMoves,
       })
       .from(games)
       .where(whereClause(playerId, filters))

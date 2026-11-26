@@ -8,6 +8,7 @@ import type * as z from 'zod/v4';
 import { ChessComClient } from '../../src/clients/chesscom.client.js';
 import type { Database } from '../../src/db/client.js';
 import type {
+  openingMoveTreeOutput,
   openingStatsOutput,
   opponentStatsOutput,
   performanceOutput,
@@ -62,6 +63,7 @@ interface Outputs {
   get_recent_games: z.infer<typeof recentGamesOutput>;
   get_game_details: z.infer<typeof gameDetailsOutput>;
   get_opening_statistics: z.infer<typeof openingStatsOutput>;
+  get_opening_move_tree: z.infer<typeof openingMoveTreeOutput>;
   get_opponent_statistics: z.infer<typeof opponentStatsOutput>;
   get_performance_summary: z.infer<typeof performanceOutput>;
 }
@@ -150,6 +152,7 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'get_game_details',
+      'get_opening_move_tree',
       'get_opening_statistics',
       'get_opponent_statistics',
       'get_performance_summary',
@@ -172,6 +175,9 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
     const opponents = tools.find((tool) => tool.name === 'get_opponent_statistics')!;
     expect(opponents.annotations?.idempotentHint).toBe(true);
     expect(opponents.annotations?.openWorldHint).toBe(false);
+    const moveTree = tools.find((tool) => tool.name === 'get_opening_move_tree')!;
+    expect(moveTree.inputSchema.required).toEqual(['color']);
+    expect(moveTree.inputSchema.properties?.max_ply).toMatchObject({ minimum: 1, maximum: 12 });
   });
 
   it('lists coverage, last-sync, and profile resources for the configured player', async () => {
@@ -532,6 +538,76 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
       expect(text[0]).toMatch(/No synchronized games against "nobody"/);
       expect(data.opponents).toEqual([]);
       expect(data.warnings.some((warning: string) => warning.includes('nobody'))).toBe(true);
+    });
+  });
+
+  describe('get_opening_move_tree', () => {
+    it('builds a SAN prefix tree and skips unparsed games', async () => {
+      const { text, data } = await call('get_opening_move_tree', {
+        color: 'both',
+        min_games: 1,
+        max_ply: 2,
+      });
+      expect(text[0]).toMatch(/Move tree for testplayer \(both\).*parsed games/);
+      expect(data.totals.games).toBe(7);
+      expect(data.games_with_moves).toBe(6);
+      expect(data.games_missing_moves).toBe(1);
+      expect(data.filters).toMatchObject({
+        color: 'both',
+        max_ply: 2,
+        min_games: 1,
+        max_children: 8,
+      });
+      expect(data.root).toMatchObject({
+        san: null,
+        prefix: [],
+        ply: 0,
+        games: 6,
+        children_omitted: 0,
+      });
+      // Ties on games: higher score first (f3 win before d4 draw).
+      expect(data.root.children.map((child) => [child.san, child.games])).toEqual([
+        ['e4', 4],
+        ['f3', 1],
+        ['d4', 1],
+      ]);
+      const e4 = data.root.children[0]!;
+      expect(e4.children.map((child) => [child.san, child.prefix, child.games])).toEqual([
+        ['c6', ['e4', 'c6'], 2],
+        ['e5', ['e4', 'e5'], 2],
+      ]);
+      expect(data.warnings.some((warning: string) => warning.includes('san_moves'))).toBe(true);
+      expect(data.definitions.grouping).toMatch(/SAN move prefix/);
+    });
+
+    it('filters by color and time_class and honors min_games', async () => {
+      const white = await call('get_opening_move_tree', {
+        color: 'white',
+        time_class: 'rapid',
+        min_games: 1,
+        max_ply: 1,
+      });
+      // recentWin + oldWin (Caro) + loss is black; rapid white with moves: recentWin, oldWin
+      // malformed is rapid white but null san_moves
+      expect(white.data.totals.games).toBe(3);
+      expect(white.data.games_with_moves).toBe(2);
+      expect(white.data.games_missing_moves).toBe(1);
+      expect(white.data.root.children).toEqual([
+        expect.objectContaining({ san: 'e4', games: 2, prefix: ['e4'] }),
+      ]);
+
+      const rare = await call('get_opening_move_tree', {
+        color: 'both',
+        min_games: 3,
+        max_ply: 1,
+      });
+      expect(rare.data.root.children.map((child) => child.san)).toEqual(['e4']);
+      expect(rare.data.root.children_omitted).toBe(2);
+    });
+
+    it('requires color', async () => {
+      const { result } = await call('get_opening_move_tree', {});
+      expect(result.isError).toBe(true);
     });
   });
 

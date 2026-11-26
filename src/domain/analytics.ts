@@ -1,5 +1,7 @@
 import type {
   AnalyticsGame,
+  OpeningMoveTree,
+  OpeningMoveTreeNode,
   OpeningStat,
   OpponentStat,
   RatingAverage,
@@ -11,6 +13,13 @@ import type {
 
 /** Openings (or other groups) with fewer games than this are flagged as low-sample. */
 export const LOW_SAMPLE_GAMES = 10;
+
+/** Default / hard caps for opening move-tree cardinality control. */
+export const DEFAULT_MOVE_TREE_MAX_PLY = 6;
+export const MAX_MOVE_TREE_MAX_PLY = 12;
+/** Per-node children returned after sorting by popularity (then score). */
+export const DEFAULT_MOVE_TREE_MAX_CHILDREN = 8;
+export const MAX_MOVE_TREE_MAX_CHILDREN = 20;
 
 /** Percentages are rounded to one decimal place. */
 export function percentage(numerator: number, denominator: number): number | null {
@@ -224,6 +233,131 @@ export function ratingTrends(games: readonly AnalyticsGame[]): RatingTrend[] {
     });
   }
   return trends.sort((a, b) => b.gamesWithRating - a.gamesWithRating);
+}
+
+/**
+ * Builds a repertoire-style prefix tree from validated SAN move lists. Each path is the absolute
+ * game move order (not reoriented by color). Games with null `sanMoves` are excluded from the
+ * tree and counted in `gamesMissingMoves`. Nodes below `minGames` are dropped (except the root).
+ * Each node keeps at most `maxChildren` children, sorted by games (desc), then score, then SAN.
+ */
+export function buildOpeningMoveTree(
+  games: readonly AnalyticsGame[],
+  options: {
+    maxPly?: number | undefined;
+    minGames?: number | undefined;
+    maxChildren?: number | undefined;
+  } = {},
+): OpeningMoveTree {
+  const maxPly = options.maxPly ?? DEFAULT_MOVE_TREE_MAX_PLY;
+  const minGames = options.minGames ?? 1;
+  const maxChildren = options.maxChildren ?? DEFAULT_MOVE_TREE_MAX_CHILDREN;
+
+  const root = emptyBucket();
+  let gamesWithMoves = 0;
+  let gamesMissingMoves = 0;
+
+  for (const game of games) {
+    if (game.sanMoves === null) {
+      gamesMissingMoves += 1;
+      continue;
+    }
+    gamesWithMoves += 1;
+    recordResult(root, game.result);
+    let bucket = root;
+    const limit = Math.min(maxPly, game.sanMoves.length);
+    for (let i = 0; i < limit; i += 1) {
+      const san = game.sanMoves[i]!;
+      let child = bucket.children.get(san);
+      if (!child) {
+        child = emptyBucket();
+        bucket.children.set(san, child);
+      }
+      recordResult(child, game.result);
+      bucket = child;
+    }
+  }
+
+  let nodesReturned = 0;
+  const materialize = (
+    bucket: MoveBucket,
+    san: string | null,
+    prefix: string[],
+    ply: number,
+  ): OpeningMoveTreeNode => {
+    nodesReturned += 1;
+    const summary = summarizeBucket(bucket);
+    const eligible: { san: string; bucket: MoveBucket }[] = [];
+    let belowMinGames = 0;
+    for (const [childSan, childBucket] of bucket.children) {
+      if (childBucket.games < minGames) {
+        belowMinGames += 1;
+        continue;
+      }
+      eligible.push({ san: childSan, bucket: childBucket });
+    }
+    eligible.sort(
+      (a, b) =>
+        b.bucket.games - a.bucket.games ||
+        scoreOf(b.bucket) - scoreOf(a.bucket) ||
+        a.san.localeCompare(b.san),
+    );
+    const kept = eligible.slice(0, maxChildren);
+    const childrenOmitted = belowMinGames + (eligible.length - kept.length);
+    return {
+      san,
+      prefix,
+      ply,
+      ...summary,
+      lowSample: summary.games < LOW_SAMPLE_GAMES,
+      children: kept.map((entry) =>
+        materialize(entry.bucket, entry.san, [...prefix, entry.san], ply + 1),
+      ),
+      childrenOmitted,
+    };
+  };
+
+  return {
+    root: materialize(root, null, [], 0),
+    gamesWithMoves,
+    gamesMissingMoves,
+    nodesReturned,
+  };
+}
+
+interface MoveBucket {
+  games: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  children: Map<string, MoveBucket>;
+}
+
+function emptyBucket(): MoveBucket {
+  return { games: 0, wins: 0, losses: 0, draws: 0, children: new Map() };
+}
+
+function recordResult(bucket: MoveBucket, result: AnalyticsGame['result']): void {
+  bucket.games += 1;
+  if (result === 'win') bucket.wins += 1;
+  else if (result === 'loss') bucket.losses += 1;
+  else bucket.draws += 1;
+}
+
+function summarizeBucket(bucket: MoveBucket): ResultSummary {
+  return {
+    games: bucket.games,
+    wins: bucket.wins,
+    losses: bucket.losses,
+    draws: bucket.draws,
+    winRate: percentage(bucket.wins, bucket.games),
+    scorePercentage: percentage(bucket.wins + 0.5 * bucket.draws, bucket.games),
+  };
+}
+
+function scoreOf(bucket: MoveBucket): number {
+  if (bucket.games <= 0) return 0;
+  return (bucket.wins + 0.5 * bucket.draws) / bucket.games;
 }
 
 /** Avoids Math.min(...values), which overflows the call stack for very large arrays. */
