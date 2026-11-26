@@ -22,8 +22,6 @@ export interface GameFilters {
    * Null Chess.com `rated` values never match a boolean filter.
    */
   rated?: boolean | undefined;
-  /** Exact match on stored opponent_username (lowercase). */
-  opponent?: string | undefined;
   /** Exact match on Chess.com time_control string (e.g. "600", "180+2"). */
   timeControl?: string | undefined;
 }
@@ -72,7 +70,6 @@ function whereClause(playerId: string, filters: GameFilters): SQL {
   if (filters.from) conditions.push(gte(games.playedAt, filters.from));
   if (filters.until) conditions.push(lt(games.playedAt, filters.until));
   if (filters.rated !== undefined) conditions.push(eq(games.rated, filters.rated));
-  if (filters.opponent) conditions.push(eq(games.opponentUsername, filters.opponent));
   if (filters.timeControl) conditions.push(eq(games.timeControl, filters.timeControl));
   return and(...conditions)!;
 }
