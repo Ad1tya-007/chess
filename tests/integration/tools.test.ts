@@ -174,6 +174,43 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
     expect(opponents.annotations?.openWorldHint).toBe(false);
   });
 
+  it('lists coverage, last-sync, and profile resources for the configured player', async () => {
+    const { resources } = await client.listResources();
+    expect(resources.map((resource) => resource.uri).sort()).toEqual([
+      'chess://player/testplayer/coverage',
+      'chess://player/testplayer/last-sync',
+      'chess://player/testplayer/profile',
+    ]);
+    for (const resource of resources) {
+      expect(resource.mimeType).toBe('application/json');
+      expect(resource.description?.length).toBeGreaterThan(20);
+    }
+
+    const { resourceTemplates } = await client.listResourceTemplates();
+    expect(resourceTemplates.map((template) => template.uriTemplate).sort()).toEqual([
+      'chess://player/{username}/coverage',
+      'chess://player/{username}/last-sync',
+      'chess://player/{username}/profile',
+    ]);
+  });
+
+  it('lists the three workflow prompt templates', async () => {
+    const { prompts } = await client.listPrompts();
+    expect(prompts.map((prompt) => prompt.name).sort()).toEqual([
+      'import-history',
+      'opening-repertoire-review',
+      'weekly-performance-review',
+    ]);
+    expect(prompts.length).toBeGreaterThan(0);
+    const importHistory = prompts.find((prompt) => prompt.name === 'import-history')!;
+    expect(importHistory.arguments?.some((arg) => arg.name === 'months')).toBe(true);
+
+    const got = await client.getPrompt({ name: 'import-history', arguments: { months: '2' } });
+    expect(got.messages[0]?.role).toBe('user');
+    const text = got.messages[0]?.content;
+    expect(text && text.type === 'text' ? text.text : '').toMatch(/mode "initial"/);
+  });
+
   describe('before any sync', () => {
     it('get_recent_games says nothing is synchronized', async () => {
       const { result, text, data } = await call('get_recent_games');

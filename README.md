@@ -6,16 +6,16 @@ statistics, and performance summaries. Claude connects to it as a **remote MCP s
 Streamable HTTP**; Claude does the natural-language interpretation, this server only returns
 structured data.
 
-> **Status: Milestone 6 (remote deployment) implemented.** All tools work end to end. The
-> server is ready for a public HTTPS deployment that Claude.ai connects to without sign-in,
-> restricted to Anthropic's outbound IP ranges and locked to one Chess.com username. Verification
-> against a live Claude custom connector requires your deployment and Claude account; see
-> [Connecting to Claude](#connecting-to-claude).
+> **Status: Milestone 6 (remote deployment) implemented.** Tools, three MCP resources, and three
+> prompt templates work end to end. The server is ready for a public HTTPS deployment that
+> Claude.ai connects to without sign-in, restricted to Anthropic's outbound IP ranges and locked
+> to one Chess.com username. Verification against a live Claude custom connector requires your
+> deployment and Claude account; see [Connecting to Claude](#connecting-to-claude).
 
 ## What it does and does not do
 
 **Does:** read public Chess.com PubAPI data for a configured username, store synchronized games in
-PostgreSQL, and expose them to Claude through MCP tools.
+PostgreSQL, and expose them to Claude through MCP tools, resources, and prompt templates.
 
 **Does not:** use a chess engine, detect blunders or accuracy, coach, generate training plans,
 log in to Chess.com, store Chess.com credentials, play games, or modify the Chess.com account in
@@ -32,6 +32,9 @@ Claude ──MCP over HTTPS (Streamable HTTP)──▶ platform TLS proxy :443 �
                           else bearer token) → Host/Origin validation → createMcpHandler
                           (fresh McpServer per request, stateless)
                               ├─ tool handlers: Zod in/out schemas, username lock, error mapping
+                              ├─ resources: coverage, last-sync, profile (chess:// URIs)
+                              ├─ prompts: weekly-performance-review, opening-repertoire-review,
+                              │           import-history
                               ├─ services: player (live), sync, games, analytics, local data
                               ├─ Chess.com PubAPI client → game normalizer (PGN via chess.js)
                               └─ repositories → PostgreSQL via Drizzle ORM
@@ -39,7 +42,8 @@ Claude ──MCP over HTTPS (Streamable HTTP)──▶ platform TLS proxy :443 �
 
 Tool handlers contain no SQL or analytics. They validate input, call a service, and map the
 result to snake_case JSON. Services own the logic; analytics formulas are pure functions in
-`src/domain/analytics.ts`.
+`src/domain/analytics.ts`. Resources are cheap read-only snapshots from the same services;
+prompts are short user-message templates that point at existing tools.
 
 | Path                                 | Purpose                                                              |
 | ------------------------------------ | -------------------------------------------------------------------- |
@@ -49,7 +53,9 @@ result to snake_case JSON. Services own the logic; analytics formulas are pure f
 | `src/server/access.ts`               | `/mcp` access control: client IP allowlist, then bearer token        |
 | `src/server/auth.ts`                 | Static bearer-token verifier for the SDK's `requireBearerAuth`       |
 | `src/utils/ip-allowlist.ts`          | CIDR parsing and IPv4/IPv6 matching (`node:net` `BlockList`)         |
-| `src/server/create-server.ts`        | Per-request `McpServer` factory; registers the MCP tools             |
+| `src/server/create-server.ts`        | Per-request `McpServer` factory; tools, resources, and prompts       |
+| `src/server/resources.ts`            | MCP resources: coverage, last-sync, optional profile snapshot        |
+| `src/server/prompts.ts`              | MCP prompt templates for common sync → analyze workflows             |
 | `src/server/tools/*.tools.ts`        | Tool definitions: descriptions, input/output schemas, annotations    |
 | `src/server/tools/shared.ts`         | Shared schemas, date parsing, and the error-safe `runTool` wrapper   |
 | `src/db/schema.ts`                   | Drizzle schema: `players`, `games`, `chesscom_archives`, `sync_runs` |
@@ -214,6 +220,8 @@ npx @modelcontextprotocol/inspector
 # CLI
 npx @modelcontextprotocol/inspector --cli http://127.0.0.1:3000/mcp --method initialize
 npx @modelcontextprotocol/inspector --cli http://127.0.0.1:3000/mcp --method tools/list
+npx @modelcontextprotocol/inspector --cli http://127.0.0.1:3000/mcp --method resources/list
+npx @modelcontextprotocol/inspector --cli http://127.0.0.1:3000/mcp --method prompts/list
 
 # Call a tool (arguments as name=value)
 npx @modelcontextprotocol/inspector --cli http://127.0.0.1:3000/mcp --method tools/call \
@@ -363,9 +371,10 @@ sign-in** and relies on these layers instead:
 ranges, so anyone with a Claude account who learns your `/mcp` URL can add it as a connector.
 They could then read your **public** Chess.com data (which Chess.com publishes anyway), read your
 synced games, and trigger bounded syncs. They cannot reach other usernames, modify anything on
-Chess.com, or run anything except the seven read-only tools. Keep the URL private. If that is not
-acceptable, put OAuth with an external identity provider in front (this server would act only as
-a resource server) or use static request headers if your organization has that beta.
+Chess.com, or run anything except the registered tools, resources, and prompts. Keep the URL
+private. If that is not acceptable, put OAuth with an external identity provider in front (this
+server would act only as a resource server) or use static request headers if your organization
+has that beta.
 
 Identity-aware proxies that need an interactive login (such as SSO in front of the app) cannot
 protect a Claude.ai connector, because Anthropic's servers cannot complete that login. A
@@ -519,21 +528,50 @@ call.
 (`{ from, to }` as `YYYY-MM`), `archives_remaining`, `failures`, `warnings` (capped at 20), plus
 the sync run ID and timestamps.
 
+## MCP resources
+
+Clients can discover local coverage and sync staleness without inventing a tool sequence.
+`resources/list` returns concrete URIs for the configured `CHESSCOM_USERNAME`. URI templates use
+`chess://player/{username}/…`; the username lock still applies on read.
+
+| URI                                            | Source                        | Contents                                                                  |
+| ---------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------- |
+| `chess://player/{username}/coverage`           | Local database                | `data_coverage` (games stored, synced months, last sync) plus warnings    |
+| `chess://player/{username}/last-sync`          | Local database (`sync_runs`)  | Last run status/counters and `last_successful_sync_at`                    |
+| `chess://player/{username}/profile` (optional) | Chess.com PubAPI (live/cache) | Profile snapshot plus `local_data`; prefer `get_player_profile` for tools |
+
+Bodies are `application/json`. Prefer tools when you need structured tool results and annotations;
+use resources when the client wants a discoverable snapshot (Inspector, connectors that surface
+resources).
+
+## MCP prompts
+
+Registered prompt templates encode common workflows as short user messages that name the tools to
+call. They do not run tools themselves.
+
+| Prompt                      | Args                                    | Intended tool sequence                                                                             |
+| --------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `weekly-performance-review` | optional `time_class`                   | `sync_chesscom_games` (if needed) → `get_performance_summary` (`7d`) → optional `get_recent_games` |
+| `opening-repertoire-review` | `color`, optional `time_class`          | sync if needed → `get_opening_statistics` → optional `get_game_details`                            |
+| `import-history`            | `months` (1–`MAX_SYNC_MONTHS_PER_CALL`) | `sync_chesscom_games` with `mode: "initial"`; repeat while `archives_remaining` > 0                |
+
+List them with Inspector `prompts/list` (or any MCP client that supports prompts).
+
 ## MCP tools
 
 The tool names are stable. Every tool takes an optional `username` (default:
 `CHESSCOM_USERNAME`) and validates all input with Zod.
 
-| Tool                      | Data source          | Purpose                                                                                      |
-| ------------------------- | -------------------- | -------------------------------------------------------------------------------------------- |
-| `get_player_profile`      | Chess.com (live)     | Name, title, country, profile URL, join date, last online                                    |
-| `get_player_stats`        | Chess.com (live)     | Current and best rating plus all-time record per category; FIDE, tactics                     |
-| `sync_chesscom_games`     | Chess.com → database | Import monthly archives (`mode`, `months` 1–`MAX_SYNC_MONTHS_PER_CALL`)                      |
-| `get_recent_games`        | Local database       | Newest-first games; filter by `time_class`, `result`, `color`, dates; page                   |
-| `get_game_details`        | Local database       | Metadata, PGN, and SAN moves for one stored game by `game_url`                               |
-| `get_opening_statistics`  | Local database       | Per-opening results; `color` (white/black/both), `time_class`, dates, `min_games`            |
-| `get_opponent_statistics` | Local database       | Per-opponent / head-to-head; optional `opponent`, color, time class, dates, `min_games`      |
-| `get_performance_summary` | Local database       | `period` 7d/30d/90d/all: results, colors, ratings, streaks, top openings                     |
+| Tool                      | Data source          | Purpose                                                                                 |
+| ------------------------- | -------------------- | --------------------------------------------------------------------------------------- |
+| `get_player_profile`      | Chess.com (live)     | Name, title, country, profile URL, join date, last online                               |
+| `get_player_stats`        | Chess.com (live)     | Current and best rating plus all-time record per category; FIDE, tactics                |
+| `sync_chesscom_games`     | Chess.com → database | Import monthly archives (`mode`, `months` 1–`MAX_SYNC_MONTHS_PER_CALL`)                 |
+| `get_recent_games`        | Local database       | Newest-first games; filter by `time_class`, `result`, `color`, dates; page              |
+| `get_game_details`        | Local database       | Metadata, PGN, and SAN moves for one stored game by `game_url`                          |
+| `get_opening_statistics`  | Local database       | Per-opening results; `color` (white/black/both), `time_class`, dates, `min_games`       |
+| `get_opponent_statistics` | Local database       | Per-opponent / head-to-head; optional `opponent`, color, time class, dates, `min_games` |
+| `get_performance_summary` | Local database       | `period` 7d/30d/90d/all: results, colors, ratings, streaks, top openings                |
 
 **Response format.** Each tool returns a one-line text summary, the same data as JSON text (for
 clients that ignore structured output), and `structuredContent` matching a published
