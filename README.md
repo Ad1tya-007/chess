@@ -45,38 +45,38 @@ result to snake_case JSON. Services own the logic; analytics formulas are pure f
 `src/domain/analytics.ts`. Resources are cheap read-only snapshots from the same services;
 prompts are short user-message templates that point at existing tools.
 
-| Path                                 | Purpose                                                              |
-| ------------------------------------ | -------------------------------------------------------------------- |
-| `src/index.ts`                       | Entrypoint: config, logger, DB pool, HTTP listen, shutdown           |
-| `src/config/env.ts`                  | Zod-validated environment configuration                              |
-| `src/server/transport.ts`            | Express app, `/health`, `/mcp`, request logging, error handling      |
-| `src/server/access.ts`               | `/mcp` access control: client IP allowlist, then bearer token        |
-| `src/server/auth.ts`                 | Static bearer-token verifier for the SDK's `requireBearerAuth`       |
-| `src/utils/ip-allowlist.ts`          | CIDR parsing and IPv4/IPv6 matching (`node:net` `BlockList`)         |
-| `src/server/create-server.ts`        | Per-request `McpServer` factory; tools, resources, and prompts       |
-| `src/server/resources.ts`            | MCP resources: coverage, last-sync, optional profile snapshot        |
-| `src/server/prompts.ts`              | MCP prompt templates for common sync → analyze workflows             |
-| `src/server/tools/*.tools.ts`        | Tool definitions: descriptions, input/output schemas, annotations    |
-| `src/server/tools/shared.ts`         | Shared schemas, date parsing, and the error-safe `runTool` wrapper   |
-| `src/db/schema.ts`                   | Drizzle schema: `players`, `games`, `chesscom_archives`, `sync_runs` |
-| `src/db/migrations/`                 | Generated SQL migrations (committed)                                 |
-| `src/db/migrate.ts`                  | Migration runner                                                     |
-| `src/clients/chesscom.client.ts`     | Chess.com PubAPI client: timeouts, retries, caching, errors          |
-| `src/clients/chesscom.schemas.ts`    | Defensive Zod parsing and normalization of PubAPI responses          |
-| `src/domain/game-normalizer.ts`      | Archive game → player-perspective `NormalizedGame`                   |
-| `src/utils/pgn.ts`                   | PGN header parsing and SAN move validation (chess.js)                |
-| `src/utils/errors.ts`                | `AppError` / `ChessComApiError` with client-safe messages            |
-| `src/repositories/*.ts`              | Database access: players, games (idempotent upsert), archives, runs  |
-| `src/domain/analytics.ts`            | Win rate, score %, averages, streaks, openings, move tree, opponents, rating trends    |
-| `src/services/sync.service.ts`       | Bounded initial/incremental sync with overlap protection             |
-| `src/services/player.service.ts`     | Live profile and stats lookups                                       |
-| `src/services/game.service.ts`       | Filtered game listing and game details (local data only)             |
-| `src/services/analytics.service.ts`  | Opening stats, move tree, opponent records, performance summaries    |
-| `src/services/local-data.service.ts` | Sync coverage and empty/stale/partial-data warnings                  |
-| `src/services/create-services.ts`    | Wires the Chess.com client, repositories, and services               |
-| `scripts/sync.ts`                    | Local CLI sync (`npm run sync`)                                      |
-| `scripts/check-remote.ts`            | End-to-end check of a deployed server (`npm run check:remote`)       |
-| `Dockerfile`                         | Production image: migrations, then server; non-root; health check    |
+| Path                                 | Purpose                                                                             |
+| ------------------------------------ | ----------------------------------------------------------------------------------- |
+| `src/index.ts`                       | Entrypoint: config, logger, DB pool, HTTP listen, shutdown                          |
+| `src/config/env.ts`                  | Zod-validated environment configuration                                             |
+| `src/server/transport.ts`            | Express app, `/health`, `/mcp`, request logging, error handling                     |
+| `src/server/access.ts`               | `/mcp` access control: client IP allowlist, then bearer token                       |
+| `src/server/auth.ts`                 | Static bearer-token verifier for the SDK's `requireBearerAuth`                      |
+| `src/utils/ip-allowlist.ts`          | CIDR parsing and IPv4/IPv6 matching (`node:net` `BlockList`)                        |
+| `src/server/create-server.ts`        | Per-request `McpServer` factory; tools, resources, and prompts                      |
+| `src/server/resources.ts`            | MCP resources: coverage, last-sync, optional profile snapshot                       |
+| `src/server/prompts.ts`              | MCP prompt templates for common sync → analyze workflows                            |
+| `src/server/tools/*.tools.ts`        | Tool definitions: descriptions, input/output schemas, annotations                   |
+| `src/server/tools/shared.ts`         | Shared schemas, date parsing, and the error-safe `runTool` wrapper                  |
+| `src/db/schema.ts`                   | Drizzle schema: `players`, `games`, `chesscom_archives`, `sync_runs`                |
+| `src/db/migrations/`                 | Generated SQL migrations (committed)                                                |
+| `src/db/migrate.ts`                  | Migration runner                                                                    |
+| `src/clients/chesscom.client.ts`     | Chess.com PubAPI client: timeouts, retries, caching, errors                         |
+| `src/clients/chesscom.schemas.ts`    | Defensive Zod parsing and normalization of PubAPI responses                         |
+| `src/domain/game-normalizer.ts`      | Archive game → player-perspective `NormalizedGame`                                  |
+| `src/utils/pgn.ts`                   | PGN header parsing and SAN move validation (chess.js)                               |
+| `src/utils/errors.ts`                | `AppError` / `ChessComApiError` with client-safe messages                           |
+| `src/repositories/*.ts`              | Database access: players, games (idempotent upsert), archives, runs                 |
+| `src/domain/analytics.ts`            | Win rate, score %, averages, streaks, openings, move tree, opponents, rating trends |
+| `src/services/sync.service.ts`       | Bounded initial/incremental sync with overlap protection                            |
+| `src/services/player.service.ts`     | Live profile and stats lookups                                                      |
+| `src/services/game.service.ts`       | Filtered game listing and game details (local data only)                            |
+| `src/services/analytics.service.ts`  | Opening stats, move tree, opponent records, performance summaries                   |
+| `src/services/local-data.service.ts` | Sync coverage and empty/stale/partial-data warnings                                 |
+| `src/services/create-services.ts`    | Wires the Chess.com client, repositories, and services                              |
+| `scripts/sync.ts`                    | Local CLI sync (`npm run sync`)                                                     |
+| `scripts/check-remote.ts`            | End-to-end check of a deployed server (`npm run check:remote`)                      |
+| `Dockerfile`                         | Production image: migrations, then server; non-root; health check                   |
 
 **SDK choice:** this project uses MCP TypeScript SDK **v2** (`@modelcontextprotocol/server`,
 `@modelcontextprotocol/express`, `@modelcontextprotocol/node`), the current stable line. Its
@@ -562,17 +562,17 @@ List them with Inspector `prompts/list` (or any MCP client that supports prompts
 The tool names are stable. Every tool takes an optional `username` (default:
 `CHESSCOM_USERNAME`) and validates all input with Zod.
 
-| Tool                      | Data source          | Purpose                                                                                 |
-| ------------------------- | -------------------- | --------------------------------------------------------------------------------------- |
-| `get_player_profile`      | Chess.com (live)     | Name, title, country, profile URL, join date, last online                               |
-| `get_player_stats`        | Chess.com (live)     | Current and best rating plus all-time record per category; FIDE, tactics                |
-| `sync_chesscom_games`     | Chess.com → database | Import monthly archives (`mode`, `months` 1–`MAX_SYNC_MONTHS_PER_CALL`)                 |
-| `get_recent_games`        | Local database       | Newest-first games; filter by `time_class`, `result`, `color`, dates; page              |
-| `get_game_details`        | Local database       | Metadata, PGN, and SAN moves for one stored game by `game_url`                          |
-| `get_opening_statistics`  | Local database       | Per-opening results; `color` (white/black/both), `time_class`, dates, `min_games`       |
-| `get_opening_move_tree`   | Local database       | SAN-prefix repertoire tree; `color`, `time_class`, `max_ply`, `min_games`               |
-| `get_opponent_statistics` | Local database       | Per-opponent / head-to-head; optional `opponent`, color, time class, dates, `min_games` |
-| `get_performance_summary` | Local database       | `period` 7d/30d/90d/all: results, colors, ratings, streaks, top openings                |
+| Tool                      | Data source          | Purpose                                                                                                                              |
+| ------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `get_player_profile`      | Chess.com (live)     | Name, title, country, profile URL, join date, last online                                                                            |
+| `get_player_stats`        | Chess.com (live)     | Current and best rating plus all-time record per category; FIDE, tactics                                                             |
+| `sync_chesscom_games`     | Chess.com → database | Import monthly archives (`mode`, `months` 1–`MAX_SYNC_MONTHS_PER_CALL`)                                                              |
+| `get_recent_games`        | Local database       | Newest-first games; filter by `time_class`, `result`, `color`, dates, `rated`, `opponent`, `time_control`; page                      |
+| `get_game_details`        | Local database       | Metadata, PGN, and SAN moves for one stored game by `game_url`                                                                       |
+| `get_opening_statistics`  | Local database       | Per-opening results; `color` (white/black/both), `time_class`, dates, `rated`, `opponent`, `time_control`, `min_games`               |
+| `get_opening_move_tree`   | Local database       | SAN-prefix repertoire tree; `color`, `time_class`, `max_ply`, `min_games`                                                            |
+| `get_opponent_statistics` | Local database       | Per-opponent / head-to-head; optional `opponent`, color, time class, dates, `min_games`                                              |
+| `get_performance_summary` | Local database       | `period` 7d/30d/90d/all; optional `time_class`, `rated`, `opponent`, `time_control`: results, colors, ratings, streaks, top openings |
 
 **Response format.** Each tool returns a one-line text summary, the same data as JSON text (for
 clients that ignore structured output), and `structuredContent` matching a published
@@ -591,6 +591,12 @@ and no PGNs (use `get_game_details`). `get_opening_statistics` / `get_opponent_s
 `limit` 1–100 (default 20), `min_games` default 3 (1 when `opponent` is set on opponent stats).
 Analytics consider at most the 50,000 most recent matching games and warn if more exist. Request
 bodies are capped at 64 KB.
+
+**Shared local filters.** `get_recent_games`, `get_opening_statistics`, and
+`get_performance_summary` accept optional `rated` (boolean), `opponent` (exact username,
+case-insensitive), and `time_control` (exact Chess.com string such as `600` or `180+2`) in
+addition to the older `time_class` / date filters. Omitting `rated` includes rated, unrated, and
+null-rated games; `rated: true` or `false` excludes the other (and null).
 
 **`get_game_details` safety.** The URL is only a lookup key into the local database and is never
 fetched. It accepts `https://www.chess.com/game/<type>/<id>`, with or without `www`, a trailing

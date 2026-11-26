@@ -44,6 +44,7 @@ const GAMES = {
   loss: fixtures.missingEcoAndOpening(),
   oldWin: fixtures.whiteWin(),
 };
+GAMES.loss.rated = false;
 const DATES: Record<keyof typeof GAMES, string> = {
   recentWin: '2026-11-24T10:00:00Z',
   blackWin: '2026-11-20T10:00:00Z',
@@ -371,6 +372,36 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
         '2026-11-10',
         '2026-11-05',
       ]);
+      expect(await ids({ rated: true })).toEqual([
+        '2026-11-24',
+        '2026-11-20',
+        '2026-11-10',
+        '2026-11-05',
+        '2026-10-01',
+      ]);
+      expect(await ids({ rated: false })).toEqual(['2026-10-02']);
+      expect(await ids({ opponent: 'Opponent' })).toEqual([
+        '2026-11-24',
+        '2026-11-20',
+        '2026-11-05',
+        '2026-10-01',
+      ]);
+      expect(await ids({ time_control: '180+2' })).toEqual(['2026-11-20']);
+      const echoed = await call('get_recent_games', {
+        rated: true,
+        opponent: 'Opponent',
+        time_control: '600',
+      });
+      expect(echoed.data.filters).toMatchObject({
+        rated: true,
+        opponent: 'opponent',
+        time_control: '600',
+      });
+      expect(echoed.data.games.map((game) => game.played_at.slice(0, 10))).toEqual([
+        '2026-11-24',
+        '2026-11-05',
+        '2026-10-01',
+      ]);
     });
 
     it('pages with limit and offset', async () => {
@@ -396,6 +427,8 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
       [{ username: 'bad name!' }, /Input validation error/],
       [{ from_date: 'yesterday' }, /Input validation error/],
       [{ result: 'resigned' }, /Input validation error/],
+      [{ opponent: 'bad name!' }, /Input validation error/],
+      [{ time_control: '' }, /Input validation error/],
       [{ from_date: '2026-11-10', to_date: '2026-11-01' }, /invalid_input.*before to_date/],
     ])('rejects %o', async (args, message) => {
       const { result, text } = await call('get_recent_games', args);
@@ -474,6 +507,36 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
       expect(filtered.data.filters.min_games).toBe(3);
       expect(filtered.data.openings).toEqual([]);
       expect(filtered.data.games_below_min_games).toBe(7);
+    });
+
+    it('filters by rated, opponent, and time_control', async () => {
+      const rated = await call('get_opening_statistics', {
+        color: 'both',
+        min_games: 1,
+        rated: true,
+      });
+      expect(rated.data.totals.games).toBe(5);
+      expect(rated.data.filters).toMatchObject({
+        rated: true,
+        opponent: null,
+        time_control: null,
+      });
+
+      const vsOpp = await call('get_opening_statistics', {
+        color: 'both',
+        min_games: 1,
+        opponent: 'OPP',
+      });
+      expect(vsOpp.data.totals.games).toBe(1);
+      expect(vsOpp.data.filters.opponent).toBe('opp');
+
+      const control = await call('get_opening_statistics', {
+        color: 'both',
+        min_games: 1,
+        time_control: '180+2',
+      });
+      expect(control.data.totals.games).toBe(1);
+      expect(control.data.filters.time_control).toBe('180+2');
     });
 
     it('requires color', async () => {
@@ -666,6 +729,27 @@ describe.skipIf(!testDatabaseUrl)('MCP tools (requires TEST_DATABASE_URL)', () =
         }),
       ]);
       expect(data.warnings).toEqual([]);
+    });
+
+    it('filters by rated, opponent, and time_control', async () => {
+      const rated = await call('get_performance_summary', { period: 'all', rated: false });
+      expect(rated.data.results.games).toBe(1);
+      expect(rated.data).toMatchObject({
+        rated: false,
+        opponent: null,
+        time_control: null,
+      });
+
+      const vs = await call('get_performance_summary', { period: 'all', opponent: 'drawer' });
+      expect(vs.data.results).toMatchObject({ games: 1, draws: 1 });
+      expect(vs.data.opponent).toBe('drawer');
+
+      const control = await call('get_performance_summary', {
+        period: 'all',
+        time_control: '60',
+      });
+      expect(control.data.results.games).toBe(1);
+      expect(control.data.time_control).toBe('60');
     });
   });
 

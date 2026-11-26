@@ -209,6 +209,34 @@ describe.skipIf(!testDatabaseUrl)('repositories (requires TEST_DATABASE_URL)', (
     });
   });
 
+  describe('GameRepository filters', () => {
+    it('filters by rated, opponent, and time_control; omit rated includes null', async () => {
+      const player = await players.getOrCreate(PLAYER);
+      const rated = normalized(fixtures.whiteWin());
+      const unratedFlag = { ...normalized(fixtures.blackWin()), rated: false };
+      const missingRated = normalized(fixtures.missingRatings());
+      await games.upsertMany(player.id, [rated, unratedFlag, missingRated]);
+
+      expect(await games.countMatching(player.id, {})).toBe(3);
+      expect(await games.countMatching(player.id, { rated: true })).toBe(1);
+      expect(await games.countMatching(player.id, { rated: false })).toBe(1);
+      expect(await games.countMatching(player.id, { opponent: 'opponent' })).toBe(2);
+      expect(await games.countMatching(player.id, { timeControl: '180+2' })).toBe(1);
+
+      const summaries = await games.listSummaries(
+        player.id,
+        { rated: true, opponent: 'opponent', timeControl: '600' },
+        { limit: 10, offset: 0 },
+      );
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0]).toMatchObject({
+        rated: true,
+        opponentUsername: 'opponent',
+        timeControl: '600',
+      });
+    });
+  });
+
   describe('ArchiveRepository.recordCheck', () => {
     it('records a downloaded archive and keeps validators across 304 checks', async () => {
       const player = await players.getOrCreate(PLAYER);

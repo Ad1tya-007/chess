@@ -61,6 +61,25 @@ export const timeClassInput = z
   .optional()
   .describe('Restrict to one time class: daily, rapid, blitz, or bullet.');
 
+/** Omit to include rated, unrated, and null-rated games (default). */
+export const ratedInput = z
+  .boolean()
+  .optional()
+  .describe(
+    'When true, only rated games; when false, only unrated. Omit to include both (default).',
+  );
+
+export const opponentInput = usernameSchema
+  .optional()
+  .describe('Exact opponent username match (case-insensitive).');
+
+export const timeControlInput = z
+  .string()
+  .min(1)
+  .max(50)
+  .optional()
+  .describe('Exact Chess.com time_control string, e.g. "600" or "180+2".');
+
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 const dateInput = z

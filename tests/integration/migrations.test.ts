@@ -40,6 +40,8 @@ describe.skipIf(!testDatabaseUrl)('database migrations (requires TEST_DATABASE_U
         'games_player_time_class_played_at_idx',
         'games_player_color_idx',
         'games_player_eco_idx',
+        'games_player_opponent_username_idx',
+        'games_player_rated_idx',
       ]),
     );
     expect(names).not.toContain('games_chesscom_game_url_key');

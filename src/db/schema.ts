@@ -87,6 +87,8 @@ export const games = pgTable(
     ),
     index('games_player_color_idx').on(table.playerId, table.playerColor),
     index('games_player_eco_idx').on(table.playerId, table.eco),
+    index('games_player_opponent_username_idx').on(table.playerId, table.opponentUsername),
+    index('games_player_rated_idx').on(table.playerId, table.rated),
   ],
 );
 

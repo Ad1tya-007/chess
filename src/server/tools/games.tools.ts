@@ -12,11 +12,14 @@ import {
   fromDateInput,
   iso,
   isoDate,
+  opponentInput,
   parseFromDate,
   parseToDate,
+  ratedInput,
   runTool,
   SOURCE_LOCAL,
   timeClassInput,
+  timeControlInput,
   toDateInput,
   type UsernamePolicy,
   warningsOutput,
@@ -64,6 +67,9 @@ export const recentGamesOutput = z.object({
     color: z.string().nullable(),
     from_date: z.string().nullable(),
     to_date: z.string().nullable(),
+    rated: z.boolean().nullable(),
+    opponent: z.string().nullable(),
+    time_control: z.string().nullable(),
   }),
   total_matching: z.number().int(),
   returned: z.number().int(),
@@ -116,8 +122,9 @@ export function registerGameTools(
       description:
         'List synchronized games from the local database, newest first, with result and color ' +
         "from the player's perspective, opponent, ratings, time class, opening, and game URL. " +
-        'Filter by time class, result, color, and date range; page with limit/offset. Reads ' +
-        'only synchronized data: if nothing is synced or data is stale, the warnings say so and ' +
+        'Filter by time class, result, color, date range, rated, opponent, and time_control; ' +
+        'page with limit/offset. Omitting rated includes rated and unrated games. Reads only ' +
+        'synchronized data: if nothing is synced or data is stale, the warnings say so and ' +
         'sync_chesscom_games should be called first. Does not include PGNs (use get_game_details).',
       inputSchema: z.object({
         username: users.input,
@@ -140,6 +147,9 @@ export function registerGameTools(
         color: z.enum(PLAYER_COLORS).optional().describe('Color the player had.'),
         from_date: fromDateInput,
         to_date: toDateInput,
+        rated: ratedInput,
+        opponent: opponentInput,
+        time_control: timeControlInput,
       }),
       outputSchema: recentGamesOutput,
       annotations: { title: 'List synchronized games', ...READ_ONLY_LOCAL },
@@ -155,6 +165,9 @@ export function registerGameTools(
           color: input.color,
           from: parseFromDate(input.from_date),
           until: parseToDate(input.to_date),
+          rated: input.rated,
+          opponent: input.opponent,
+          timeControl: input.time_control,
         });
         const data: z.infer<typeof recentGamesOutput> = {
           username: result.username,
@@ -166,6 +179,9 @@ export function registerGameTools(
             color: input.color ?? null,
             from_date: input.from_date ?? null,
             to_date: input.to_date ?? null,
+            rated: input.rated ?? null,
+            opponent: input.opponent?.toLowerCase() ?? null,
+            time_control: input.time_control ?? null,
           },
           total_matching: result.totalMatching,
           returned: result.games.length,
