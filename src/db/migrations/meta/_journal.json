@@ -15,6 +15,13 @@
       "when": 1795042344840,
       "tag": "0001_per_player_games_and_archives",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795725515543,
+      "tag": "0002_game_filter_indexes",
+      "breakpoints": true
     }
   ]
 }

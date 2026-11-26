@@ -1,6 +1,6 @@
 import type { GameResult, PlayerColor, TimeClass } from '../domain/game.types.js';
 import type { GameRepository, GameRow, GameSummaryRow } from '../repositories/game.repository.js';
-import { resolveUsername } from '../utils/chesscom-username.js';
+import { normalizeChessComUsername, resolveUsername } from '../utils/chesscom-username.js';
 import { AppError } from '../utils/errors.js';
 import { canonicalGameUrl } from '../utils/game-url.js';
 import type { LocalDataService, LocalDataStatus } from './local-data.service.js';
@@ -19,6 +19,9 @@ export interface RecentGamesQuery {
   from?: Date | undefined;
   /** Exclusive. */
   until?: Date | undefined;
+  rated?: boolean | undefined;
+  opponent?: string | undefined;
+  timeControl?: string | undefined;
 }
 
 export interface RecentGames {
@@ -68,6 +71,9 @@ export class GameService {
       color: query.color,
       from: query.from,
       until: query.until,
+      rated: query.rated,
+      opponent: normalizeOpponentFilter(query.opponent),
+      timeControl: query.timeControl,
     };
     const [games, totalMatching] = await Promise.all([
       this.deps.games.listSummaries(local.player.id, filters, { limit, offset }),
@@ -111,4 +117,10 @@ export function assertRange(from: Date | undefined, until: Date | undefined): vo
   if (from && until && from.getTime() >= until.getTime()) {
     throw new AppError('invalid_input', 'from_date must be before to_date.');
   }
+}
+
+/** Lowercases a validated Chess.com opponent username for exact DB match. */
+export function normalizeOpponentFilter(opponent: string | undefined): string | undefined {
+  if (opponent === undefined) return undefined;
+  return normalizeChessComUsername(opponent) ?? undefined;
 }

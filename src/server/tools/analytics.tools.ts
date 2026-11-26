@@ -39,13 +39,16 @@ import {
   nullableIsoDate,
   openingOutput,
   openingWire,
+  opponentInput,
   parseFromDate,
   parseToDate,
+  ratedInput,
   resultSummaryOutput,
   resultSummaryWire,
   runTool,
   SOURCE_LOCAL,
   timeClassInput,
+  timeControlInput,
   toDateInput,
   type UsernamePolicy,
   warningsOutput,
@@ -64,6 +67,9 @@ export const openingStatsOutput = z.object({
     time_class: z.string().nullable(),
     from_date: z.string().nullable(),
     to_date: z.string().nullable(),
+    rated: z.boolean().nullable(),
+    opponent: z.string().nullable(),
+    time_control: z.string().nullable(),
     min_games: z.number().int(),
     limit: z.number().int(),
   }),
@@ -95,6 +101,9 @@ export const performanceOutput = z.object({
   period_start: nullableIsoDate,
   period_end: isoDate,
   time_class: z.string().nullable(),
+  rated: z.boolean().nullable(),
+  opponent: z.string().nullable(),
+  time_control: z.string().nullable(),
   definitions: z.record(z.string(), z.string()),
   results: resultSummaryOutput,
   by_color: z.object({ white: resultSummaryOutput, black: resultSummaryOutput }),
@@ -372,7 +381,8 @@ export function registerAnalyticsTools(
         'Per-opening results (games, wins, losses, draws, win rate, score percentage) from the ' +
         "player's perspective, grouped by ECO code plus opening name, computed from " +
         'synchronized games. Choose color white, black, or both; optionally filter by time ' +
-        `class and date range. Openings with fewer than ${LOW_SAMPLE_GAMES} games are flagged ` +
+        'class, date range, rated, opponent, and time_control. Omitting rated includes rated ' +
+        `and unrated games. Openings with fewer than ${LOW_SAMPLE_GAMES} games are flagged ` +
         'low_sample. Requires synchronized games (see sync_chesscom_games).',
       inputSchema: z.object({
         username: users.input,
@@ -382,6 +392,9 @@ export function registerAnalyticsTools(
         time_class: timeClassInput,
         from_date: fromDateInput,
         to_date: toDateInput,
+        rated: ratedInput,
+        opponent: opponentInput,
+        time_control: timeControlInput,
         min_games: z
           .number()
           .int()
@@ -410,6 +423,9 @@ export function registerAnalyticsTools(
           timeClass: input.time_class,
           from: parseFromDate(input.from_date),
           until: parseToDate(input.to_date),
+          rated: input.rated,
+          opponent: input.opponent,
+          timeControl: input.time_control,
           minGames: input.min_games,
           limit: input.limit,
         });
@@ -422,6 +438,9 @@ export function registerAnalyticsTools(
             time_class: stats.timeClass,
             from_date: input.from_date ?? null,
             to_date: input.to_date ?? null,
+            rated: stats.rated,
+            opponent: stats.opponent,
+            time_control: stats.timeControl,
             min_games: stats.minGames,
             limit: input.limit ?? DEFAULT_OPENING_LIMIT,
           },
@@ -466,13 +485,17 @@ export function registerAnalyticsTools(
         'Summarize results over a period (7d, 30d, 90d, or all) from synchronized games: games, ' +
         'wins/losses/draws, win rate and score percentage, white vs black, average player and ' +
         'opponent rating, rating trend per time class (from recorded game ratings), top ' +
-        'openings, and longest win/loss streaks. Optionally filter by time class. Requires ' +
+        'openings, and longest win/loss streaks. Optionally filter by time class, rated, ' +
+        'opponent, and time_control. Omitting rated includes rated and unrated games. Requires ' +
         'synchronized games (see sync_chesscom_games); for official current ratings use ' +
         'get_player_stats.',
       inputSchema: z.object({
         username: users.input,
         period: z.enum(PERIODS).optional().describe('7d, 30d (default), 90d, or all.'),
         time_class: timeClassInput,
+        rated: ratedInput,
+        opponent: opponentInput,
+        time_control: timeControlInput,
       }),
       outputSchema: performanceOutput,
       annotations: { title: 'Performance summary', ...ANALYTICS_ANNOTATIONS },
@@ -483,6 +506,9 @@ export function registerAnalyticsTools(
           username: users.check(input.username),
           period: input.period,
           timeClass: input.time_class,
+          rated: input.rated,
+          opponent: input.opponent,
+          timeControl: input.time_control,
         });
         const data: z.infer<typeof performanceOutput> = {
           username: summary.username,
@@ -492,6 +518,9 @@ export function registerAnalyticsTools(
           period_start: iso(summary.periodStart),
           period_end: iso(summary.periodEnd),
           time_class: summary.timeClass,
+          rated: summary.rated,
+          opponent: summary.opponent,
+          time_control: summary.timeControl,
           definitions: {
             ...DEFINITIONS,
             average_rating: 'arithmetic mean of non-null ratings; denominator is games_with_rating',

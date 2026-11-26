@@ -26,7 +26,7 @@ import type { PlayerColor, TimeClass } from '../domain/game.types.js';
 import type { GameFilters, GameRepository } from '../repositories/game.repository.js';
 import { isValidChessComUsername, resolveUsername } from '../utils/chesscom-username.js';
 import { AppError } from '../utils/errors.js';
-import { assertInteger, assertRange } from './game.service.js';
+import { assertInteger, assertRange, normalizeOpponentFilter } from './game.service.js';
 import type { LocalDataService, LocalDataStatus } from './local-data.service.js';
 
 export {
@@ -72,6 +72,9 @@ export interface OpeningStatisticsQuery {
   timeClass?: TimeClass | undefined;
   from?: Date | undefined;
   until?: Date | undefined;
+  rated?: boolean | undefined;
+  opponent?: string | undefined;
+  timeControl?: string | undefined;
   minGames?: number | undefined;
   limit?: number | undefined;
 }
@@ -82,6 +85,9 @@ export interface OpeningStatistics {
   timeClass: TimeClass | null;
   from: Date | null;
   until: Date | null;
+  rated: boolean | null;
+  opponent: string | null;
+  timeControl: string | null;
   minGames: number;
   totals: ResultSummary;
   openings: OpeningStat[];
@@ -100,6 +106,9 @@ export interface PerformanceSummaryQuery {
   username?: string | undefined;
   period?: Period | undefined;
   timeClass?: TimeClass | undefined;
+  rated?: boolean | undefined;
+  opponent?: string | undefined;
+  timeControl?: string | undefined;
 }
 
 export interface OpeningMoveTreeQuery {
@@ -140,6 +149,9 @@ export interface PerformanceSummary {
   periodStart: Date | null;
   periodEnd: Date;
   timeClass: TimeClass | null;
+  rated: boolean | null;
+  opponent: string | null;
+  timeControl: string | null;
   results: ResultSummary;
   byColor: Record<PlayerColor, ResultSummary>;
   averageOpponentRating: RatingAverage;
@@ -209,11 +221,15 @@ export class AnalyticsService {
     assertInteger('limit', limit, 1, MAX_OPENING_LIMIT);
     assertRange(query.from, query.until);
 
+    const opponent = normalizeOpponentFilter(query.opponent);
     const dataset = await this.load(query.username, {
       timeClass: query.timeClass,
       color: query.color === 'both' ? undefined : query.color,
       from: query.from,
       until: query.until,
+      rated: query.rated,
+      opponent,
+      timeControl: query.timeControl,
     });
     const aggregated = aggregateOpenings(dataset.games, minGames);
     const openings = aggregated.openings.slice(0, limit);
@@ -235,6 +251,9 @@ export class AnalyticsService {
       timeClass: query.timeClass ?? null,
       from: query.from ?? null,
       until: query.until ?? null,
+      rated: query.rated ?? null,
+      opponent: opponent ?? null,
+      timeControl: query.timeControl ?? null,
       minGames,
       totals: summarizeResults(dataset.games),
       openings,
@@ -314,9 +333,13 @@ export class AnalyticsService {
     const periodStart =
       period === 'all' ? null : new Date(periodEnd.getTime() - PERIOD_DAYS[period] * 86_400_000);
 
+    const opponent = normalizeOpponentFilter(query.opponent);
     const dataset = await this.load(query.username, {
       timeClass: query.timeClass,
       from: periodStart ?? undefined,
+      rated: query.rated,
+      opponent,
+      timeControl: query.timeControl,
     });
     const { games } = dataset;
 
@@ -337,6 +360,9 @@ export class AnalyticsService {
       periodStart,
       periodEnd,
       timeClass: query.timeClass ?? null,
+      rated: query.rated ?? null,
+      opponent: opponent ?? null,
+      timeControl: query.timeControl ?? null,
       results: summarizeResults(games),
       byColor: {
         white: summarizeResults(games.filter((game) => game.playerColor === 'white')),

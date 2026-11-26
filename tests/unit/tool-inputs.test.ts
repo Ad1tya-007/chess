@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseFromDate, parseToDate } from '../../src/server/tools/shared.js';
+import { normalizeOpponentFilter } from '../../src/services/game.service.js';
 import { canonicalGameUrl } from '../../src/utils/game-url.js';
 
 describe('canonicalGameUrl', () => {
@@ -49,5 +50,15 @@ describe('date inputs', () => {
   it('passes undefined through', () => {
     expect(parseFromDate(undefined)).toBeUndefined();
     expect(parseToDate(undefined)).toBeUndefined();
+  });
+});
+
+describe('normalizeOpponentFilter', () => {
+  it('lowercases a valid Chess.com username', () => {
+    expect(normalizeOpponentFilter('Hikaru')).toBe('hikaru');
+  });
+
+  it('passes undefined through', () => {
+    expect(normalizeOpponentFilter(undefined)).toBeUndefined();
   });
 });
