@@ -2,14 +2,23 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 
 import { LOW_SAMPLE_GAMES } from '../../domain/analytics.js';
-import type { OpponentStat, RatingAverage, Streak } from '../../domain/analytics.types.js';
+import type {
+  OpeningMoveTreeNode,
+  OpponentStat,
+  RatingAverage,
+  Streak,
+} from '../../domain/analytics.types.js';
 import { PLAYER_COLORS } from '../../domain/game.types.js';
 import {
   type AnalyticsService,
   DEFAULT_MIN_GAMES,
+  DEFAULT_MOVE_TREE_MAX_CHILDREN,
+  DEFAULT_MOVE_TREE_MAX_PLY,
   DEFAULT_OPENING_LIMIT,
   DEFAULT_OPPONENT_LIMIT,
   MAX_MIN_GAMES,
+  MAX_MOVE_TREE_MAX_CHILDREN,
+  MAX_MOVE_TREE_MAX_PLY,
   MAX_OPENING_LIMIT,
   MAX_OPPONENT_LIMIT,
   PERIODS,
@@ -151,6 +160,66 @@ export const opponentStatsOutput = z.object({
   warnings: warningsOutput,
 });
 
+interface MoveTreeNodeWire extends z.infer<typeof resultSummaryOutput> {
+  san: string | null;
+  prefix: string[];
+  ply: number;
+  low_sample: boolean;
+  children: MoveTreeNodeWire[];
+  children_omitted: number;
+}
+
+const moveTreeNodeOutput: z.ZodType<MoveTreeNodeWire> = z.lazy(() =>
+  resultSummaryOutput.extend({
+    san: z.string().nullable().describe('SAN that reached this node; null at the root.'),
+    prefix: z.array(z.string()).describe('Full SAN sequence from the start of the game.'),
+    ply: z.number().int().describe('Depth in half-moves; 0 at the root.'),
+    low_sample: z.boolean(),
+    children: z.array(moveTreeNodeOutput),
+    children_omitted: z
+      .number()
+      .int()
+      .describe('Sibling branches dropped by min_games or the per-node children cap.'),
+  }),
+);
+
+export const openingMoveTreeOutput = z.object({
+  username: z.string(),
+  source: z.literal(SOURCE_LOCAL),
+  generated_at: isoDate,
+  filters: z.object({
+    color: z.enum(['white', 'black', 'both']),
+    time_class: z.string().nullable(),
+    from_date: z.string().nullable(),
+    to_date: z.string().nullable(),
+    max_ply: z.number().int(),
+    min_games: z.number().int(),
+    max_children: z.number().int(),
+  }),
+  definitions: z.record(z.string(), z.string()),
+  totals: resultSummaryOutput.describe('All games matching the filters (including unparsed).'),
+  games_with_moves: z.number().int(),
+  games_missing_moves: z.number().int(),
+  nodes_returned: z.number().int(),
+  root: moveTreeNodeOutput,
+  date_range: dateRangeOutput,
+  truncated: z.boolean(),
+  data_coverage: dataCoverageOutput,
+  warnings: warningsOutput,
+});
+
+function moveTreeNodeWire(node: OpeningMoveTreeNode): MoveTreeNodeWire {
+  return {
+    san: node.san,
+    prefix: node.prefix,
+    ply: node.ply,
+    ...resultSummaryWire(node),
+    low_sample: node.lowSample,
+    children: node.children.map(moveTreeNodeWire),
+    children_omitted: node.childrenOmitted,
+  };
+}
+
 const ANALYTICS_ANNOTATIONS = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -185,6 +254,116 @@ export function registerAnalyticsTools(
   users: UsernamePolicy,
   logger: Logger,
 ) {
+  server.registerTool(
+    'get_opening_move_tree',
+    {
+      title: 'Opening move tree',
+      description:
+        'Repertoire-style prefix tree of what the player actually played, grouped by SAN move ' +
+        'sequences from synchronized games (not ECO names). Choose color white, black, or both; ' +
+        'optionally filter by time class and date range. Depth is controlled by max_ply; rare ' +
+        `branches below min_games are dropped; each node returns at most ${DEFAULT_MOVE_TREE_MAX_CHILDREN} ` +
+        `top children (cap ${MAX_MOVE_TREE_MAX_CHILDREN}). Games with null san_moves are skipped and ` +
+        'warned. Requires synchronized games (see sync_chesscom_games).',
+      inputSchema: z.object({
+        username: users.input,
+        color: z
+          .enum([...PLAYER_COLORS, 'both'])
+          .describe('Games where the player had white, black, or both.'),
+        time_class: timeClassInput,
+        from_date: fromDateInput,
+        to_date: toDateInput,
+        max_ply: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_MOVE_TREE_MAX_PLY)
+          .optional()
+          .describe(
+            `How many half-moves (plies) deep to expand (1-${MAX_MOVE_TREE_MAX_PLY}, default ${DEFAULT_MOVE_TREE_MAX_PLY}).`,
+          ),
+        min_games: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_MIN_GAMES)
+          .optional()
+          .describe(`Hide branches with fewer games (default ${DEFAULT_MIN_GAMES}).`),
+        max_children: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_MOVE_TREE_MAX_CHILDREN)
+          .optional()
+          .describe(
+            `Top children per node (1-${MAX_MOVE_TREE_MAX_CHILDREN}, default ${DEFAULT_MOVE_TREE_MAX_CHILDREN}).`,
+          ),
+      }),
+      outputSchema: openingMoveTreeOutput,
+      annotations: { title: 'Opening move tree', ...ANALYTICS_ANNOTATIONS },
+    },
+    (input) =>
+      runTool(logger, 'get_opening_move_tree', async () => {
+        const tree = await analytics.getOpeningMoveTree({
+          username: users.check(input.username),
+          color: input.color,
+          timeClass: input.time_class,
+          from: parseFromDate(input.from_date),
+          until: parseToDate(input.to_date),
+          maxPly: input.max_ply,
+          minGames: input.min_games,
+          maxChildren: input.max_children,
+        });
+        const data: z.infer<typeof openingMoveTreeOutput> = {
+          username: tree.username,
+          source: SOURCE_LOCAL,
+          generated_at: iso(new Date()),
+          filters: {
+            color: tree.color,
+            time_class: tree.timeClass,
+            from_date: input.from_date ?? null,
+            to_date: input.to_date ?? null,
+            max_ply: tree.maxPly,
+            min_games: tree.minGames,
+            max_children: tree.maxChildren,
+          },
+          definitions: {
+            ...DEFINITIONS,
+            low_sample: `fewer than ${LOW_SAMPLE_GAMES} games`,
+            grouping:
+              'SAN move prefix from the start of the game; color filters which games are included, ' +
+              'not the move orientation',
+            max_ply: 'half-moves (plies) from the initial position',
+          },
+          totals: resultSummaryWire(tree.totals),
+          games_with_moves: tree.gamesWithMoves,
+          games_missing_moves: tree.gamesMissingMoves,
+          nodes_returned: tree.nodesReturned,
+          root: moveTreeNodeWire(tree.root),
+          date_range: {
+            first_game_at: iso(tree.firstGameAt),
+            last_game_at: iso(tree.lastGameAt),
+          },
+          truncated: tree.truncated,
+          data_coverage: dataCoverageWire(tree.local),
+          warnings: tree.warnings,
+        };
+        const top = tree.root.children[0];
+        return {
+          summary:
+            `Move tree for ${tree.username} (${tree.color}) over ${formatCount(tree.gamesWithMoves)} ` +
+            `parsed games (max_ply ${tree.maxPly}, min_games ${tree.minGames}): ` +
+            `${formatCount(tree.nodesReturned)} node(s).` +
+            (top
+              ? ` Most common first move: ${top.san} (${top.games} games, score ${formatPercent(top.scorePercentage)}).`
+              : tree.gamesMissingMoves > 0
+                ? ` ${tree.gamesMissingMoves} game(s) lacked san_moves.`
+                : ''),
+          data,
+        };
+      }),
+  );
+
   server.registerTool(
     'get_opening_statistics',
     {

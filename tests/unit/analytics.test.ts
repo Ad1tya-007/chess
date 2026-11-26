@@ -4,6 +4,7 @@ import {
   aggregateOpenings,
   aggregateOpponents,
   averageRating,
+  buildOpeningMoveTree,
   computeStreaks,
   LOW_SAMPLE_GAMES,
   percentage,
@@ -26,6 +27,7 @@ function game(overrides: Partial<AnalyticsGame> = {}): AnalyticsGame {
     playerRating: 1500,
     opponentUsername: 'opponent',
     opponentRating: 1500,
+    sanMoves: ['e4', 'c6', 'd4', 'd5'],
     ...overrides,
   };
 }
@@ -250,6 +252,95 @@ describe('aggregateOpponents', () => {
       'a',
       'b',
     ]);
+  });
+});
+
+describe('buildOpeningMoveTree', () => {
+  it('groups by SAN prefix and reports rates along each path', () => {
+    const games = [
+      game({ sanMoves: ['e4', 'e5', 'Nf3'], result: 'win' }),
+      game({ sanMoves: ['e4', 'e5', 'Bc4'], result: 'loss' }),
+      game({ sanMoves: ['e4', 'c5'], result: 'draw' }),
+      game({ sanMoves: ['d4', 'd5'], result: 'win' }),
+      game({ sanMoves: null, result: 'win' }),
+    ];
+    const tree = buildOpeningMoveTree(games, { maxPly: 3, minGames: 1, maxChildren: 8 });
+    expect(tree.gamesWithMoves).toBe(4);
+    expect(tree.gamesMissingMoves).toBe(1);
+    expect(tree.root).toMatchObject({
+      san: null,
+      prefix: [],
+      ply: 0,
+      games: 4,
+      wins: 2,
+      losses: 1,
+      draws: 1,
+      winRate: 50,
+      scorePercentage: 62.5,
+      lowSample: true,
+    });
+    expect(tree.root.children.map((child) => child.san)).toEqual(['e4', 'd4']);
+    const e4 = tree.root.children[0]!;
+    expect(e4).toMatchObject({
+      san: 'e4',
+      prefix: ['e4'],
+      ply: 1,
+      games: 3,
+      wins: 1,
+      losses: 1,
+      draws: 1,
+      scorePercentage: 50,
+    });
+    expect(e4.children.map((child) => [child.san, child.games])).toEqual([
+      ['e5', 2],
+      ['c5', 1],
+    ]);
+    expect(e4.children[0]!.children.map((child) => child.san).sort()).toEqual(['Bc4', 'Nf3']);
+  });
+
+  it('drops rare branches and caps children per node', () => {
+    const games = [
+      ...Array.from({ length: 3 }, () => game({ sanMoves: ['e4', 'e5'], result: 'win' })),
+      game({ sanMoves: ['e4', 'c5'], result: 'loss' }),
+      game({ sanMoves: ['d4'], result: 'draw' }),
+      game({ sanMoves: ['c4'], result: 'win' }),
+      game({ sanMoves: ['Nf3'], result: 'win' }),
+    ];
+    const pruned = buildOpeningMoveTree(games, { maxPly: 2, minGames: 2, maxChildren: 8 });
+    expect(pruned.root.children.map((child) => child.san)).toEqual(['e4']);
+    expect(pruned.root.childrenOmitted).toBe(3);
+    expect(pruned.root.children[0]!.children.map((child) => child.san)).toEqual(['e5']);
+    expect(pruned.root.children[0]!.childrenOmitted).toBe(1);
+
+    const capped = buildOpeningMoveTree(games, { maxPly: 1, minGames: 1, maxChildren: 2 });
+    // e4 (4 games) then c4/Nf3 tied on score 100% — SAN order keeps c4 over Nf3.
+    expect(capped.root.children.map((child) => child.san)).toEqual(['e4', 'c4']);
+    expect(capped.root.childrenOmitted).toBe(2);
+  });
+
+  it('respects max_ply and treats empty move lists as root-only', () => {
+    const tree = buildOpeningMoveTree(
+      [
+        game({ sanMoves: ['e4', 'e5', 'Nf3', 'Nc6'], result: 'win' }),
+        game({ sanMoves: [], result: 'loss' }),
+      ],
+      { maxPly: 2, minGames: 1 },
+    );
+    expect(tree.root.games).toBe(2);
+    expect(tree.root.children).toHaveLength(1);
+    expect(tree.root.children[0]!.prefix).toEqual(['e4']);
+    expect(tree.root.children[0]!.children[0]!.prefix).toEqual(['e4', 'e5']);
+    expect(tree.root.children[0]!.children[0]!.children).toEqual([]);
+  });
+
+  it('returns an empty root when every game lacks san_moves', () => {
+    const tree = buildOpeningMoveTree([game({ sanMoves: null }), game({ sanMoves: null })]);
+    expect(tree).toMatchObject({
+      gamesWithMoves: 0,
+      gamesMissingMoves: 2,
+      nodesReturned: 1,
+      root: { games: 0, children: [], winRate: null, scorePercentage: null },
+    });
   });
 });
 

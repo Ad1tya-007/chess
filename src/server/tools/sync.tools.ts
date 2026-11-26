@@ -63,12 +63,12 @@ export function registerSyncTools(
       title: 'Sync Chess.com games',
       description:
         'Download monthly game archives from the public Chess.com API into the local database, ' +
-        'which get_recent_games, get_game_details, get_opening_statistics, and ' +
-        'get_performance_summary read from. Use mode "incremental" (default) to refresh the ' +
-        'newest months, and mode "initial" to import older history: each initial call imports ' +
-        'the next batch of never-downloaded months, newest first; repeat while ' +
-        'archives_remaining > 0 and more history is needed. Only writes to the local ' +
-        'database; never modifies the Chess.com account. Can take tens of seconds.',
+        'which get_recent_games, get_game_details, get_opening_statistics, get_opening_move_tree, ' +
+        'get_opponent_statistics, and get_performance_summary read from. Use mode "incremental" ' +
+        '(default) to refresh the newest months, and mode "initial" to import older history: ' +
+        'each initial call imports the next batch of never-downloaded months, newest first; ' +
+        'repeat while archives_remaining > 0 and more history is needed. Only writes to the ' +
+        'local database; never modifies the Chess.com account. Can take tens of seconds.',
       inputSchema: z.object({
         username: users.input,
         months: z

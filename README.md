@@ -67,11 +67,11 @@ prompts are short user-message templates that point at existing tools.
 | `src/utils/pgn.ts`                   | PGN header parsing and SAN move validation (chess.js)                |
 | `src/utils/errors.ts`                | `AppError` / `ChessComApiError` with client-safe messages            |
 | `src/repositories/*.ts`              | Database access: players, games (idempotent upsert), archives, runs  |
-| `src/domain/analytics.ts`            | Win rate, score %, averages, streaks, openings, rating trends        |
+| `src/domain/analytics.ts`            | Win rate, score %, averages, streaks, openings, move tree, opponents, rating trends    |
 | `src/services/sync.service.ts`       | Bounded initial/incremental sync with overlap protection             |
 | `src/services/player.service.ts`     | Live profile and stats lookups                                       |
 | `src/services/game.service.ts`       | Filtered game listing and game details (local data only)             |
-| `src/services/analytics.service.ts`  | Opening statistics and performance summaries                         |
+| `src/services/analytics.service.ts`  | Opening stats, move tree, opponent records, performance summaries    |
 | `src/services/local-data.service.ts` | Sync coverage and empty/stale/partial-data warnings                  |
 | `src/services/create-services.ts`    | Wires the Chess.com client, repositories, and services               |
 | `scripts/sync.ts`                    | Local CLI sync (`npm run sync`)                                      |
@@ -570,6 +570,7 @@ The tool names are stable. Every tool takes an optional `username` (default:
 | `get_recent_games`        | Local database       | Newest-first games; filter by `time_class`, `result`, `color`, dates; page              |
 | `get_game_details`        | Local database       | Metadata, PGN, and SAN moves for one stored game by `game_url`                          |
 | `get_opening_statistics`  | Local database       | Per-opening results; `color` (white/black/both), `time_class`, dates, `min_games`       |
+| `get_opening_move_tree`   | Local database       | SAN-prefix repertoire tree; `color`, `time_class`, `max_ply`, `min_games`               |
 | `get_opponent_statistics` | Local database       | Per-opponent / head-to-head; optional `opponent`, color, time class, dates, `min_games` |
 | `get_performance_summary` | Local database       | `period` 7d/30d/90d/all: results, colors, ratings, streaks, top openings                |
 
@@ -609,6 +610,7 @@ All statistics are computed from the requested player's perspective over the fil
 | Streak            | Consecutive wins (or losses) in chronological order; a draw ends both; ties report the most recent |
 | Opening group     | ECO code plus opening name; distinct ECO codes are never merged; `low_sample` below 10 games       |
 | Opponent group    | Opponent username, case-insensitive; `low_sample` below 10 games; includes color split             |
+| Move-tree prefix  | Absolute SAN sequence from the start of the game; color filters games, not move orientation        |
 | Rating trend      | Per time class: player's rating in the last minus the first rated synced game                      |
 
 Every percentage sits next to its game count, and statistics that can't be computed (for example,

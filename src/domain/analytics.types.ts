@@ -11,6 +11,8 @@ export interface AnalyticsGame {
   playerRating: number | null;
   opponentUsername: string;
   opponentRating: number | null;
+  /** Validated SAN ply list from the stored game; null when moves could not be parsed. */
+  sanMoves: string[] | null;
 }
 
 export interface ResultSummary {
@@ -76,4 +78,30 @@ export interface RatingTrend {
   maxRating: number | null;
   firstGameAt: Date | null;
   lastGameAt: Date | null;
+}
+
+/** One node in a SAN-prefix opening move tree (root has `san` null and empty `prefix`). */
+export interface OpeningMoveTreeNode extends ResultSummary {
+  /** SAN of the move that reached this node from its parent; null at the root. */
+  san: string | null;
+  /** Full SAN sequence from the start of the game to this node. */
+  prefix: string[];
+  /** Depth in plies (half-moves); 0 at the root. */
+  ply: number;
+  /** True when `games` is below LOW_SAMPLE_GAMES; treat rates as anecdotal. */
+  lowSample: boolean;
+  /** Top children by games played (then score), after min_games filtering. */
+  children: OpeningMoveTreeNode[];
+  /** Sibling branches dropped by min_games or the per-node children cap. */
+  childrenOmitted: number;
+}
+
+export interface OpeningMoveTree {
+  root: OpeningMoveTreeNode;
+  /** Games whose `sanMoves` were non-null and contributed to the tree. */
+  gamesWithMoves: number;
+  /** Filtered games skipped because `sanMoves` was null. */
+  gamesMissingMoves: number;
+  /** Nodes included in the returned tree (including the root). */
+  nodesReturned: number;
 }
