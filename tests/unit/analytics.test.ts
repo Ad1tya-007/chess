@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   aggregateOpenings,
+  aggregateOpponents,
   averageRating,
   computeStreaks,
   LOW_SAMPLE_GAMES,
@@ -23,6 +24,7 @@ function game(overrides: Partial<AnalyticsGame> = {}): AnalyticsGame {
     eco: 'B12',
     openingName: 'Caro Kann Defense Advance Variation',
     playerRating: 1500,
+    opponentUsername: 'opponent',
     opponentRating: 1500,
     ...overrides,
   };
@@ -182,6 +184,72 @@ describe('aggregateOpenings', () => {
   it('handles large datasets without exceeding the call stack', () => {
     const large = Array.from({ length: 200_000 }, () => game());
     expect(aggregateOpenings(large).openings[0]!.games).toBe(200_000);
+  });
+});
+
+describe('aggregateOpponents', () => {
+  it('groups case-insensitively and keeps casing from the most recent game', () => {
+    const games = [
+      game({ opponentUsername: 'Hikaru', result: 'win', opponentRating: 2800 }),
+      game({
+        opponentUsername: 'hikaru',
+        result: 'loss',
+        playerColor: 'black',
+        opponentRating: 2810,
+      }),
+      game({ opponentUsername: 'Magnus', result: 'draw', opponentRating: 2850 }),
+      game({ opponentUsername: 'HIKARU', result: 'win', opponentRating: 2820 }),
+    ];
+    const { opponents } = aggregateOpponents(games);
+    expect(opponents.map((row) => [row.opponentUsername, row.games])).toEqual([
+      ['HIKARU', 3],
+      ['Magnus', 1],
+    ]);
+    expect(opponents[0]).toMatchObject({
+      wins: 2,
+      losses: 1,
+      draws: 0,
+      winRate: 66.7,
+      scorePercentage: 66.7,
+      lowSample: true,
+      averageOpponentRating: { value: 2810, gamesWithRating: 3 },
+      byColor: {
+        white: { games: 2, wins: 2 },
+        black: { games: 1, losses: 1 },
+      },
+    });
+  });
+
+  it('drops groups below min games and flags low samples', () => {
+    const games = [
+      ...Array.from({ length: 4 }, () => game({ opponentUsername: 'frequent' })),
+      game({ opponentUsername: 'once' }),
+    ];
+    const result = aggregateOpponents(games, 2);
+    expect(result.opponents).toHaveLength(1);
+    expect(result.groupsBelowMinGames).toBe(1);
+    expect(result.gamesBelowMinGames).toBe(1);
+    expect(result.opponents[0]!.lowSample).toBe(true);
+
+    const many = Array.from({ length: LOW_SAMPLE_GAMES }, () =>
+      game({ opponentUsername: 'frequent' }),
+    );
+    expect(aggregateOpponents(many).opponents[0]!.lowSample).toBe(false);
+  });
+
+  it('sorts by games, then score, then username', () => {
+    const games = [
+      game({ opponentUsername: 'b', result: 'win' }),
+      game({ opponentUsername: 'a', result: 'win' }),
+      game({ opponentUsername: 'a', result: 'loss' }),
+      game({ opponentUsername: 'c', result: 'win' }),
+      game({ opponentUsername: 'c', result: 'win' }),
+    ];
+    expect(aggregateOpponents(games).opponents.map((row) => row.opponentUsername)).toEqual([
+      'c',
+      'a',
+      'b',
+    ]);
   });
 });
 

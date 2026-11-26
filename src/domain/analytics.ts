@@ -1,6 +1,7 @@
 import type {
   AnalyticsGame,
   OpeningStat,
+  OpponentStat,
   RatingAverage,
   RatingTrend,
   ResultSummary,
@@ -136,6 +137,58 @@ export function aggregateOpenings(
       (a.eco ?? '').localeCompare(b.eco ?? ''),
   );
   return { openings, groupsBelowMinGames, gamesBelowMinGames };
+}
+
+/**
+ * Groups games by opponent username (case-insensitive). Display casing comes from the most recent
+ * game in each group. Sorted by games played (descending), then score percentage, then username.
+ * Groups below `minGames` are dropped.
+ */
+export function aggregateOpponents(
+  games: readonly AnalyticsGame[],
+  minGames = 1,
+): { opponents: OpponentStat[]; groupsBelowMinGames: number; gamesBelowMinGames: number } {
+  const groups = new Map<string, AnalyticsGame[]>();
+  for (const game of games) {
+    const key = game.opponentUsername.toLowerCase();
+    const group = groups.get(key);
+    if (group) group.push(game);
+    else groups.set(key, [game]);
+  }
+
+  const opponents: OpponentStat[] = [];
+  let groupsBelowMinGames = 0;
+  let gamesBelowMinGames = 0;
+  for (const group of groups.values()) {
+    if (group.length < minGames) {
+      groupsBelowMinGames += 1;
+      gamesBelowMinGames += group.length;
+      continue;
+    }
+    const times = minMax(group.map((game) => game.playedAt.getTime()))!;
+    // Most recent game's casing (input is chronological ascending).
+    const displayUsername = group.at(-1)!.opponentUsername;
+    opponents.push({
+      opponentUsername: displayUsername,
+      ...summarizeResults(group),
+      lowSample: group.length < LOW_SAMPLE_GAMES,
+      firstPlayedAt: new Date(times.min),
+      lastPlayedAt: new Date(times.max),
+      averageOpponentRating: averageRating(group.map((game) => game.opponentRating)),
+      byColor: {
+        white: summarizeResults(group.filter((game) => game.playerColor === 'white')),
+        black: summarizeResults(group.filter((game) => game.playerColor === 'black')),
+      },
+    });
+  }
+
+  opponents.sort(
+    (a, b) =>
+      b.games - a.games ||
+      (b.scorePercentage ?? 0) - (a.scorePercentage ?? 0) ||
+      a.opponentUsername.toLowerCase().localeCompare(b.opponentUsername.toLowerCase()),
+  );
+  return { opponents, groupsBelowMinGames, gamesBelowMinGames };
 }
 
 /**
